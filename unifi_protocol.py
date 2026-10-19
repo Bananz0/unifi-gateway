@@ -285,6 +285,9 @@ def _create_complete_inform(config, dc):
     if 'dpi_stats' in dc.data:
         payload['dpi-stats'] = dc.data['dpi_stats']
         payload['dpi-clients'] = [c['mac'] for c in dc.data['dpi_stats']]
+        # Newer controllers read client DPI from 'dpi_stats' in any device's
+        # inform; the hyphenated USG field is only kept for older ones.
+        payload['dpi_stats'] = dc.data['dpi_stats']
 
     return json.dumps(payload)
 
