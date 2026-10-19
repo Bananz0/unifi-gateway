@@ -159,6 +159,12 @@ class UnifiGateway(Daemon):
             'Device adopted, starting inform loop (interval=%ds)', self.interval
         )
 
+        # Re-apply the last provisioned config so the platform matches the
+        # controller after a restart (no-op if it was already applied).
+        stored_cfg = self.config.get('provisioned', 'system_cfg', fallback='')
+        if self.running and stored_cfg:
+            self._apply_system_cfg(stored_cfg)
+
         while self.running:
             try:
                 self.datacollector.update()
@@ -188,11 +194,21 @@ class UnifiGateway(Daemon):
 
         elif resp_type == 'setparam':
             HANDLED_SETPARAM_KEYS = {
-                '_type', 'server_time_in_utc', 'blocked_sta', 'mgmt_cfg',
+                '_type', 'server_time_in_utc', 'mgmt_cfg', 'cfgversion',
+                'interval',
             }
             for key, value in response.items():
                 if key == 'mgmt_cfg':
                     self._parse_mgmt_cfg(value)
+                elif key == 'interval':
+                    self._set_interval(value)
+                elif key == 'system_cfg':
+                    if self._apply_system_cfg(value):
+                        HANDLED_SETPARAM_KEYS.add(key)
+                elif key == 'blocked_sta':
+                    if self._call_collector(
+                            'set_blocked_clients', _parse_mac_list(value)):
+                        HANDLED_SETPARAM_KEYS.add(key)
                 if key not in ('_type', 'server_time_in_utc', 'blocked_sta'):
                     self.config.set('provisioned', key, str(value))
                 if key not in HANDLED_SETPARAM_KEYS:
@@ -203,7 +219,10 @@ class UnifiGateway(Daemon):
             self._save_config()
 
         elif resp_type == 'reboot':
-            logger.info('Received reboot request from controller (ignored)')
+            if self._call_collector('reboot'):
+                logger.info('Reboot requested from controller')
+            else:
+                logger.info('Received reboot request from controller (ignored)')
 
         elif resp_type == 'cmd':
             self._handle_cmd(response)
@@ -249,8 +268,19 @@ class UnifiGateway(Daemon):
         cmd = response.get('cmd', '')
         logger.info('Received command: %s', cmd)
 
+        mac = response.get('mac', '')
         if cmd == 'speed-test':
-            self._run_speedtest()
+            if not self._call_collector('run_speedtest'):
+                self._run_speedtest()
+        elif cmd in ('block-sta', 'unblock-sta', 'kick-sta') and mac:
+            method = {
+                'block-sta': 'block_client',
+                'unblock-sta': 'unblock_client',
+                'kick-sta': 'kick_client',
+            }[cmd]
+            if not self._call_collector(method, mac):
+                logger.warning('%s for %s is not supported on this platform', cmd, mac)
+                self._record_unhandled('command', cmd, response)
         elif cmd == 'set-locate':
             self.config.set('gateway', 'locating', 'True')
             logger.info('Locate mode enabled')
@@ -260,6 +290,31 @@ class UnifiGateway(Daemon):
         else:
             logger.warning('Unknown command: %s', cmd)
             self._record_unhandled('command', cmd, response)
+
+    def _call_collector(self, method, *args):
+        """Ask the platform collector to act on a controller request.
+        Returns True only if the platform handled it."""
+        try:
+            return bool(getattr(self.datacollector, method)(*args))
+        except Exception as e:
+            logger.error('%s failed: %s', method, e, exc_info=True)
+            return False
+
+    def _apply_system_cfg(self, value):
+        try:
+            cfg = json.loads(value) if isinstance(value, str) else value
+        except ValueError as e:
+            logger.warning('Could not parse system_cfg from controller: %s', e)
+            return False
+        if not isinstance(cfg, dict):
+            return False
+        return self._call_collector('apply_system_cfg', cfg)
+
+    def _set_interval(self, value):
+        try:
+            self.interval = max(1, int(value))
+        except (TypeError, ValueError):
+            logger.warning('Ignoring invalid inform interval %r', value)
 
     def _run_speedtest(self):
         logger.info('Running speed test...')
@@ -406,6 +461,21 @@ class UnifiGateway(Daemon):
     def _save_config(self):
         with open(CONFIG_FILE, 'w') as config_file:
             self.config.write(config_file)
+
+
+def _parse_mac_list(value):
+    """blocked_sta may arrive as a list of MACs, a list of {'mac': ...}
+    objects, or a comma/newline separated string."""
+    if isinstance(value, str):
+        value = value.replace('\n', ',').split(',')
+    macs = []
+    for item in value or []:
+        if isinstance(item, dict):
+            item = item.get('mac', '')
+        item = str(item).strip()
+        if item:
+            macs.append(item)
+    return macs
 
 
 def main():

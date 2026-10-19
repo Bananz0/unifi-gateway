@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
-import time
+import re
 import socket
+import subprocess
+import time
 
-import psutil
+try:
+    import psutil
+except ImportError:  # optional: OPNsense does not ship it
+    psutil = None
 
 
 def mac_string_2_array(mac):
@@ -17,15 +22,34 @@ def netmask_to_cidr(netmask):
     return sum(bin(int(x)).count('1') for x in netmask.split('.'))
 
 
-def uptime():
-    try:
-        return int(time.time() - psutil.boot_time())
-    except Exception:
+def boot_time():
+    """System boot time as a Unix timestamp, or None if unknown."""
+    if psutil is not None:
         try:
-            with open('/proc/uptime', 'r') as f:
-                return int(float(f.readline().split()[0]))
-        except (IOError, OSError):
-            return 0
+            return psutil.boot_time()
+        except Exception:
+            pass
+    try:
+        out = subprocess.check_output(
+            ['sysctl', '-n', 'kern.boottime'], stderr=subprocess.DEVNULL, timeout=5
+        ).decode('utf-8')
+        match = re.search(r'sec = (\d+)', out)
+        if match:
+            return int(match.group(1))
+    except (subprocess.SubprocessError, OSError):
+        pass
+    return None
+
+
+def uptime():
+    boot = boot_time()
+    if boot:
+        return int(time.time() - boot)
+    try:
+        with open('/proc/uptime', 'r') as f:
+            return int(float(f.readline().split()[0]))
+    except (IOError, OSError):
+        return 0
 
 
 def get_hostname():
@@ -56,7 +80,7 @@ def get_if_table(data, ports):
             'rx_errors': info['rx_errors'],
             'rx_multicast': info['rx_multicast'],
             'rx_packets': info['rx_packets'],
-            'speed': 1000,
+            'speed': info.get('speed', 1000),
             'tx_bytes': info['tx_bytes'],
             'tx_bps': info['tx_bps'],
             'tx_dropped': info['tx_dropped'],

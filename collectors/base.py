@@ -14,7 +14,12 @@ import socket
 import subprocess
 import time
 
-import psutil
+try:
+    import psutil
+except ImportError:  # optional: OPNsense does not ship it
+    psutil = None
+
+from tools import boot_time
 
 logger = logging.getLogger('unifi-gateway')
 
@@ -57,6 +62,8 @@ class BaseCollector:
     def _get_ifstat(self):
         ret = {}
         now = time.time()
+        if psutil is None:
+            return ret
         try:
             counters = psutil.net_io_counters(pernic=True)
         except Exception as e:
@@ -114,7 +121,7 @@ class BaseCollector:
     def _get_interface_macs(self):
         ret = {}
         try:
-            addrs = psutil.net_if_addrs()
+            addrs = psutil.net_if_addrs() if psutil else {}
         except Exception as e:
             logger.warning('Failed to get interface addresses for MACs: %s', e)
             addrs = {}
@@ -142,6 +149,8 @@ class BaseCollector:
 
     def _get_interface_addresses(self):
         ret = {}
+        if psutil is None:
+            return ret
         try:
             addrs = psutil.net_if_addrs()
         except Exception as e:
@@ -313,7 +322,7 @@ class BaseCollector:
 
     def _merge_dhcp_into_hosts(self, arp_hosts):
         """Merge DHCP leases into host table with enriched fields for topology."""
-        boot = psutil.boot_time()
+        boot = boot_time() or time.time()
         now = time.time()
         hosts_by_mac = {}
 
@@ -420,9 +429,38 @@ class BaseCollector:
         except (IOError, OSError, json.JSONDecodeError, KeyError, TypeError):
             return noresult
 
+    # ── Controller actions ───────────────────────────────────────────────
+    #
+    # Platforms that can act on controller requests override these and
+    # return True; the default False makes the gateway record the request
+    # as unhandled.
+
+    def block_client(self, mac):
+        return False
+
+    def unblock_client(self, mac):
+        return False
+
+    def set_blocked_clients(self, macs):
+        return False
+
+    def kick_client(self, mac):
+        return False
+
+    def apply_system_cfg(self, cfg, force=False):
+        return False
+
+    def reboot(self):
+        return False
+
+    def run_speedtest(self):
+        return False
+
     # ── System stats ─────────────────────────────────────────────────────
 
     def _get_system_stats(self):
+        if psutil is None:
+            return {'cpu': '0', 'mem': '0'}
         try:
             return {
                 'cpu': str(int(psutil.cpu_percent(interval=None))),

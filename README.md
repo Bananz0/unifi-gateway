@@ -163,7 +163,56 @@ DHCP leases are auto-detected at `/tmp/dhcp.leases`.
 
 ### OPNSense (FreeBSD)
 
-The daemon auto-detects FreeBSD and uses `arp -an` for the neighbor table, `netstat -rn` for routing. It supports KEA DHCP (OPNSense's default DHCP server) with auto-detection of the lease file at `/var/db/kea/kea-leases4.csv`.
+With an API key configured, the daemon talks to OPNsense's REST API (tested against 26.7) for both reporting and control. Without one it falls back to plain FreeBSD collection (`arp -an`, `netstat -rn`, lease files).
+
+Create a key under **System → Access → Users → (user) → API keys** and add:
+
+```ini
+[gateway]
+platform = opnsense
+
+[opnsense]
+url = https://127.0.0.1:443        ; webGUI address and port
+api_key = ...
+api_secret = ...
+```
+
+**Reported to the controller**
+
+| Controller view | OPNsense source |
+|---|---|
+| Interface counters, MAC, IP, link speed, WAN type | `diagnostics/traffic/interface`, `interfaces/overview` |
+| Clients (online, hostname, last seen) | ARP table + Host discovery (hostwatch) + DHCP leases |
+| Per-client traffic | Exact byte/packet totals from Insight when Netflow local capture is on (recommended: capture LAN, WAN as egress-only); otherwise estimated from `diagnostics/traffic/top` samples |
+| DHCP leases | ISC (`os-isc-dhcp`), Kea or Dnsmasq — whichever is running |
+| WAN latency, gateway, DNS servers | `routes/gateway/status`, Unbound |
+| CPU, memory, uptime | `diagnostics/system`, `diagnostics/activity` |
+| Speed test results | `os-speedtest-community` plugin |
+| Dynamic DNS | `os-ddclient` plugin |
+
+**Applied from the controller**
+
+| Controller feature | OPNsense result |
+|---|---|
+| Block / unblock client | MAC alias `ufg_blocked` + IP alias `ufg_blocked_ip` + a block rule on the LAN interfaces; existing states are killed |
+| Reconnect client (`kick-sta`) | pf states for the client are killed |
+| Firewall rules (user rules in `LAN_IN`, `WAN_LOCAL`, …) | MVC filter rules; groups become `ufg_*` aliases |
+| Port forwarding | Destination NAT rules with an associated pass rule |
+| DHCP static mappings | Kea reservations or Dnsmasq hosts (ISC DHCP has no API for this — a warning is logged) |
+| Static DNS host records | Unbound host overrides (Dnsmasq hosts if Unbound is off) |
+| Static routes | Routes, plus a gateway when the next hop has none |
+| Speed test | Runs the speedtest plugin |
+| Reboot | `core/system/reboot`, only with `allow_reboot = true` |
+
+**Mirroring OPNsense into UniFi:** add a `[unifi]` section (`url`, `username`, `password`, optional `site`, `mirror_interval`) with a local controller admin account. Every `mirror_interval` seconds (default 300), the daemon copies OPNsense's own WAN port forwards, aliases (as firewall groups), LAN/WAN firewall rules, DHCP reservations (as client fixed IPs) and static routes into the controller. Mirrored objects are named `[OPNsense] …` (clients get it in their note). OPNsense stays the source: they're refreshed from it and removed when the original goes away. When the controller pushes them back, the gateway skips them, so nothing is duplicated. Anything UniFi can't express (e.g. several ports forwarded to one, LAN-side redirects, rules on other interfaces) is skipped with a log warning.
+
+**DPI / Insights:** if Zenarmor is installed, per-client application stats are read from its reporting database and reported as USG DPI stats (`dpi = auto`, `zenarmor_db` in `[opnsense]`). UniFi Network 10.x no longer processes DPI from USG-class gateways (its Insights views need a UniFi OS gateway), so this only shows up on older controllers.
+
+**Running from source on OPNsense:** OPNsense doesn't ship psutil or pycryptodome, and neither is required here — the inform encryption falls back to the `cryptography` package OPNsense already includes, and host stats come from the API. Copy the sources to e.g. `/usr/local/lib/unifi-gateway` and run `python3 unifi_gateway.py run`.
+
+DNS host overrides are created with a 60 s TTL. If AdGuard Home sits in front of Unbound with optimistic caching on, it can still serve a removed record for up to `cache_optimistic_max_age`.
+
+Everything the daemon creates is tagged `unifi-gw:` in its description, and only tagged objects are changed or removed — your own rules and aliases are never touched. The controller's built-in rules (rule numbers 3000–3999 and 6000+, default actions, masquerade NAT) are deliberately not copied: OPNsense already has stateful defaults and automatic outbound NAT. Each section can be switched off in `[opnsense]` (see the reference below).
 
 Typical interface mapping (check your interfaces with `ifconfig`):
 
@@ -272,6 +321,27 @@ Updates are handled by your package manager: `apt upgrade`, `dnf upgrade`, `opkg
 | `speedtest_file` | `./speedtest.json` | Path to speedtest results JSON |
 | `platform` | `UNIFI-GW` | Platform string in discovery broadcasts |
 
+#### `[opnsense]`
+
+Used when `platform = opnsense` (or auto-detected on OPNsense).
+
+| Key | Default | Description |
+|---|---|---|
+| `url` | `https://127.0.0.1` | webGUI URL including port (env `OPNSENSE_URL`) |
+| `api_key` / `api_secret` | *(none)* | API credentials (env `OPNSENSE_API_KEY` / `OPNSENSE_API_SECRET`) |
+| `verify_ssl` | `false` | Verify the webGUI certificate |
+| `timeout` | `30` | API request timeout in seconds |
+| `apply_firewall` | `true` | Apply controller firewall rules and groups |
+| `apply_port_forward` | `true` | Apply controller port forwards |
+| `apply_dhcp` | `true` | Apply DHCP static mappings (Kea/Dnsmasq) |
+| `apply_dns` | `true` | Apply static DNS host records |
+| `apply_routes` | `true` | Apply static routes |
+| `block_clients` | `true` | Act on block/unblock client requests |
+| `allow_reboot` | `false` | Let the controller reboot the firewall |
+| `traffic_interval` | `30` | Seconds between per-client traffic samples (`0` disables) |
+| `host_active_window` | `300` | Seconds a client seen by host discovery stays listed |
+| `state_file` | *(next to config)* | Where blocked clients and the last applied config hash are kept |
+
 #### `[provisioned]`
 
 Populated automatically by the controller after adoption. Do not edit manually.
@@ -292,7 +362,9 @@ Results are saved to `speedtest.json` and reported in the next inform cycle.
 |---|---|
 | `unifi_gateway.py` | Entry point, inform loop, controller response handling, adoption |
 | `unifi_protocol.py` | TNBU binary protocol: AES-CBC/GCM encryption, zlib/snappy compression, JSON payload construction |
-| `datacollector.py` | Cross-platform data collection via psutil (Linux + FreeBSD), with platform-specific fallbacks |
+| `collectors/` | Platform collectors (psutil base, Linux, FreeBSD, OpenWRT, OPNsense, pfSense) |
+| `collectors/opnsense_api.py` | Stdlib-only OPNsense REST client |
+| `collectors/opnsense_sync.py` | Translates controller `system_cfg` and client blocking into OPNsense objects |
 | `tools.py` | Helper functions for building `if_table` and `network_table` structures |
 | `tlv.py` | TLV encoding for UDP discovery packets |
 | `daemon.py` | Unix daemon (double-fork, PID file) |

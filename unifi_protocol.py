@@ -2,7 +2,7 @@
 import time
 import json
 import ast
-from Crypto import Random
+import os
 
 import logging
 import zlib
@@ -12,9 +12,22 @@ try:
 except ImportError:
     HAS_SNAPPY = False
 
+# AES backend: pycryptodome when installed, otherwise the `cryptography`
+# package (which OPNsense ships as a core dependency, unlike pycryptodome).
+try:
+    from Crypto.Cipher import AES as _AES
+except ImportError:
+    _AES = None
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.exceptions import InvalidTag
+except ImportError:
+    if _AES is None:
+        raise ImportError('Install pycryptodome or cryptography for AES support')
+
 logger = logging.getLogger('unifi-gateway')
 
-from Crypto.Cipher import AES
 from struct import pack, unpack
 from binascii import a2b_hex
 
@@ -25,10 +38,47 @@ from tools import (
 )
 
 MASTER_KEY = "ba86f2bbe107c7c57eb5f2690775c712"
+AES_BLOCK_SIZE = 16
+
+
+def _cbc_encrypt(key, iv, data):
+    if _AES:
+        return _AES.new(key, _AES.MODE_CBC, iv).encrypt(data)
+    enc = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    return enc.update(data) + enc.finalize()
+
+
+def _cbc_decrypt(key, iv, data):
+    if _AES:
+        return _AES.new(key, _AES.MODE_CBC, iv).decrypt(data)
+    dec = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    return dec.update(data) + dec.finalize()
+
+
+def _gcm_encrypt(key, iv, aad, data):
+    """Return the ciphertext with the 16-byte tag appended."""
+    if _AES:
+        aes = _AES.new(key, _AES.MODE_GCM, iv)
+        aes.update(aad)
+        ciphertext, tag = aes.encrypt_and_digest(data)
+        return ciphertext + tag
+    return AESGCM(key).encrypt(iv, data, aad)
+
+
+def _gcm_decrypt(key, iv, aad, data):
+    """Decrypt ciphertext+tag; raises ValueError if authentication fails."""
+    if _AES:
+        aes = _AES.new(key, _AES.MODE_GCM, iv)
+        aes.update(aad)
+        return aes.decrypt_and_verify(data[:-16], data[-16:])
+    try:
+        return AESGCM(key).decrypt(iv, data, aad)
+    except InvalidTag:
+        raise ValueError('MAC check failed')
 
 
 def encode_inform(config, data, encryption='CBC'):
-    iv = Random.new().read(16)
+    iv = os.urandom(16)
     key = MASTER_KEY
 
     if config.getboolean('gateway', 'is_adopted'):
@@ -61,14 +111,11 @@ def encode_inform(config, data, encryption='CBC'):
 
     if encryption == 'GCM':
         encoded_data += pack('>I', len(payload) + 16)
-        _aes = AES.new(a2b_hex(key), AES.MODE_GCM, iv)
-        _aes.update(encoded_data)
-        payload, tag = _aes.encrypt_and_digest(payload)
-        payload += tag
+        payload = _gcm_encrypt(a2b_hex(key), iv, encoded_data, payload)
     elif encryption == 'CBC':
-        pad_len = AES.block_size - (len(payload) % AES.block_size)
+        pad_len = AES_BLOCK_SIZE - (len(payload) % AES_BLOCK_SIZE)
         payload += bytes([pad_len]) * pad_len
-        payload = AES.new(a2b_hex(key), AES.MODE_CBC, iv).encrypt(payload)
+        payload = _cbc_encrypt(a2b_hex(key), iv, payload)
         encoded_data += pack('>I', len(payload))
 
     encoded_data += payload
@@ -99,15 +146,11 @@ def decode_inform(config, encoded_data):
 
     if flag['encrypted']:
         if flag['encryptedGCM']:
-            tag = payload[-16:]
-            payload = payload[:-16]
-            _aes = AES.new(a2b_hex(key), AES.MODE_GCM, iv)
-            _aes.update(header)
-            payload = _aes.decrypt_and_verify(payload, tag)
+            payload = _gcm_decrypt(a2b_hex(key), iv, header, payload)
         else:
-            payload = AES.new(a2b_hex(key), AES.MODE_CBC, iv).decrypt(payload)
+            payload = _cbc_decrypt(a2b_hex(key), iv, payload)
             pad_size = payload[-1]
-            if pad_size > AES.block_size:
+            if pad_size > AES_BLOCK_SIZE:
                 raise Exception('Response not padded or padding is corrupt')
             payload = payload[:(len(payload) - pad_size)]
 
@@ -167,6 +210,7 @@ def _create_complete_inform(config, dc):
         hostname = config.get('gateway', 'hostname')
 
     system_stats = dc.data.get('system_stats', {'cpu': '0', 'mem': '0'})
+    device_uptime = dc.data.get('uptime') or uptime()
 
     active_leases = []
     for lease in dc.data.get('dhcp_leases', []):
@@ -181,7 +225,7 @@ def _create_complete_inform(config, dc):
     payload = {
         'bootrom_version': 'unknown',
         'cfgversion': config.get('provisioned', 'cfgversion') if config.has_option('provisioned', 'cfgversion') else '',
-        'config_network_wan': {'type': 'dhcp'},
+        'config_network_wan': {'type': dc.data.get('wan_type', 'dhcp')},
         'config_port_table': ports,
         'connect_request_ip': ip_addr,
         'connect_request_port': '36424',
@@ -192,7 +236,7 @@ def _create_complete_inform(config, dc):
         'guest_token': '4C1D46707239C6EB5A2366F505A44A91',
         'has_default_route_distance': True,
         'has_dnsmasq_hostfile_update': True,
-        'has_dpi': False,
+        'has_dpi': 'dpi_stats' in dc.data,
         'has_eth1': True,
         'has_porta': True,
         'has_ssh_disable': True,
@@ -214,7 +258,7 @@ def _create_complete_inform(config, dc):
         'version': config.get('gateway', 'firmware'),
         'time': int(time.time()),
         'uplink': wan_if,
-        'uptime': uptime(),
+        'uptime': device_uptime,
         'pfor-stats': [],
         'speedtest-status': {
             'latency': int(speedtest.get('ping', 0)),
@@ -227,16 +271,20 @@ def _create_complete_inform(config, dc):
             'xput_download': speedtest.get('download', 0),
             'xput_upload': speedtest.get('upload', 0),
         },
-        'ddns-status': {'dyndns': []},
+        'ddns-status': {'dyndns': dc.data.get('ddns', [])},
         'system-stats': {
             'cpu': system_stats.get('cpu', '0'),
             'mem': system_stats.get('mem', '0'),
-            'uptime': str(uptime()),
+            'uptime': str(device_uptime),
         },
         'routes': _build_routes(dc, wan_if, lan_if),
         'network_table': get_network_table(dc.data, ports),
         'if_table': get_if_table(dc.data, ports),
     }
+
+    if 'dpi_stats' in dc.data:
+        payload['dpi-stats'] = dc.data['dpi_stats']
+        payload['dpi-clients'] = [c['mac'] for c in dc.data['dpi_stats']]
 
     return json.dumps(payload)
 
