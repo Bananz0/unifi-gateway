@@ -152,6 +152,29 @@ class TestParsing:
         assert _parse_iso('') is None
 
 
+def test_failed_arp_read_cannot_keep_old_clients_fresh(collector):
+    collector._cache['arp'] = (time.time() - 90, ['stale'])
+    def fail():
+        raise OPNsenseAPIError('unavailable')
+    assert collector._call('arp', fail, ttl=30, max_stale=30) is None
+
+
+def test_unused_netflow_database_does_not_hide_estimates(collector):
+    from unittest.mock import Mock
+    collector.netflow = Mock()
+    collector.netflow.snapshot.return_value = {}
+    collector._traffic_source = 'iftop-estimate'
+    collector._host_traffic['10.0.5.101'] = {'rx_bytes': 123}
+    hosts = {h['ip']: h for h in collector._build_host_table()}
+    assert hosts['10.0.5.101']['rx_bytes'] == 123
+    collector._traffic_source = 'netflow-buckets'
+    collector.netflow.snapshot.return_value = {
+        'b8:81:98:67:48:5f': {'rx_bytes': 456, 'tx_packets': 7}}
+    hosts = {h['ip']: h for h in collector._build_host_table()}
+    assert hosts['10.0.5.101']['rx_bytes'] == 456
+    assert hosts['10.0.5.101']['tx_packets'] == 7
+
+
 class TestReads:
 
     def test_remote_mode(self, collector):

@@ -24,6 +24,7 @@ import re
 import os
 import threading
 import time
+import sqlite3
 from datetime import datetime
 
 from . import base
@@ -31,6 +32,7 @@ from .freebsd import FreeBSDCollector
 from .opnsense_api import OPNsenseAPI, OPNsenseAPIError
 from .opnsense_sync import OPNsenseConfigSync, normalize_mac
 from .zenarmor import ZenarmorDPI
+from .netflow import NetflowTotals
 from .unifi_mirror import OPNsenseMirror, UniFiController
 
 logger = logging.getLogger('unifi-gateway')
@@ -55,6 +57,7 @@ DEFAULTS = {
     'state_file': '',
     'dpi': 'auto',
     'zenarmor_db': '/usr/local/datastore/sqlite/conn_all.sqlite',
+    'netflow_db': '/var/netflow/src_addr_000300.sqlite',
 }
 
 LOCAL_HOSTS = ('127.0.0.1', 'localhost', '::1')
@@ -98,11 +101,19 @@ class OPNSenseCollector(FreeBSDCollector):
         self._blocked_refresh = None
         self._insight_start = None
         self.dpi = None
+        self.netflow = None
+        self._traffic_source = None
+        if os.path.isfile(self.opts['netflow_db']):
+            self.netflow = NetflowTotals(self.opts['netflow_db'],
+                state_file=os.path.join(os.path.dirname(self._state_path()), 'netflow-accounting.json'))
+            if self.netflow.restored:
+                self._traffic_source = 'netflow-buckets'
         self.mirror = None
         self._mirror_thread = None
         self._init_mirror(config)
         if str(self.opts['dpi']).lower() not in ('0', 'false', 'no', 'off'):
-            dpi = ZenarmorDPI(self.opts['zenarmor_db'])
+            dpi = ZenarmorDPI(self.opts['zenarmor_db'],
+                state_file=os.path.join(os.path.dirname(self._state_path()), 'zenarmor-dpi.json'))
             if dpi.available:
                 self.dpi = dpi
                 logger.info('Reporting DPI statistics from Zenarmor (%s)', dpi.db_path)
@@ -216,7 +227,7 @@ class OPNSenseCollector(FreeBSDCollector):
 
     # ── API helpers ──────────────────────────────────────────────────────
 
-    def _call(self, name, fn, ttl=0):
+    def _call(self, name, fn, ttl=0, max_stale=None):
         """Run an API read with caching and de-duplicated error logging.
         Returns None on failure."""
         if self.api is None:
@@ -231,7 +242,7 @@ class OPNSenseCollector(FreeBSDCollector):
             if self._api_errors.get(name) != str(e):
                 logger.warning('OPNsense API %s failed: %s', name, e)
             self._api_errors[name] = str(e)
-            return cached[1] if cached else None
+            return cached[1] if cached and (max_stale is None or now - cached[0] <= max_stale) else None
         if name in self._api_errors:
             logger.info('OPNsense API %s recovered', name)
             del self._api_errors[name]
@@ -275,6 +286,9 @@ class OPNSenseCollector(FreeBSDCollector):
             return
         self._ensure_traffic_sampler()
         self._ensure_mirror()
+        # Refresh counters for every inform, independently of discovery's
+        # cached API reads (the base class otherwise refreshes hosts at 120s).
+        self.data['host_table'] = self._build_host_table()
         if self.updated.get('host_table') != self._blocked_refresh:
             self._blocked_refresh = self.updated.get('host_table')
             try:
@@ -549,13 +563,18 @@ class OPNSenseCollector(FreeBSDCollector):
     def _get_neighbors_raw(self):
         if self.api is None:
             return super()._get_neighbors_raw()
-        arp = self._call('arp', lambda: self.api.search('diagnostics/interface/search_arp'))
+        arp = self._call('arp', lambda: self.api.search('diagnostics/interface/search_arp'),
+                         ttl=30, max_stale=30)
         if arp is None:
-            return super()._get_neighbors_raw()
+            result = super()._get_neighbors_raw()
+            if self.netflow:
+                self.netflow.bind(result)
+            return result
 
         lan_devices = self._lan_devices()
         overview = self._overview()
         lan_descr = {(overview.get(d) or {}).get('description') for d in lan_devices}
+        descr_device = {(overview.get(d) or {}).get('description'): d for d in lan_devices}
         now = time.time()
         window = int(self.opts['host_active_window'])
         neighbors = {}
@@ -566,7 +585,9 @@ class OPNSenseCollector(FreeBSDCollector):
             mac = normalize_mac(row.get('mac'))
             if not mac or row.get('expired'):
                 continue
-            neighbors[mac] = {'mac': mac, 'ip': row['ip'], 'last_seen': now}
+            acquired = self._cache.get('arp', (now,))[0]
+            neighbors[mac] = {'mac': mac, 'ip': row['ip'], 'realif': row['intf'],
+                              'last_seen': acquired}
             if row.get('hostname'):
                 neighbors[mac]['hostname'] = row['hostname']
             if row.get('manufacturer'):
@@ -574,7 +595,7 @@ class OPNSenseCollector(FreeBSDCollector):
 
         discovered = self._call(
             'hostwatch', lambda: self.api.search('hostdiscovery/service/search'),
-            ttl=60) or []
+            ttl=60, max_stale=300) or []
         for row in discovered:
             if row.get('interface_name') not in lan_descr:
                 continue
@@ -590,7 +611,8 @@ class OPNSenseCollector(FreeBSDCollector):
                 if last_seen and neighbors[mac]['ip'] == ip:
                     neighbors[mac]['last_seen'] = last_seen
             elif last_seen and now - last_seen <= window:
-                neighbors[mac] = {'mac': mac, 'ip': ip, 'last_seen': last_seen}
+                neighbors[mac] = {'mac': mac, 'ip': ip, 'last_seen': last_seen,
+                                  'realif': descr_device.get(row['interface_name'])}
                 if first_seen:
                     neighbors[mac]['first_seen'] = first_seen
                 if row.get('organization_name'):
@@ -600,7 +622,10 @@ class OPNSenseCollector(FreeBSDCollector):
         for mac, entry in neighbors.items():
             if 'hostname' not in entry and leases.get(mac, {}).get('hostname'):
                 entry['hostname'] = leases[mac]['hostname']
-        return list(neighbors.values())
+        result = list(neighbors.values())
+        if self.netflow:
+            self.netflow.bind(result)
+        return result
 
     def _build_host_table(self):
         if self.api is None:
@@ -608,12 +633,14 @@ class OPNSenseCollector(FreeBSDCollector):
         now = time.time()
         blocked = set(self._state.get('blocked', []))
         with self._traffic_lock:
-            traffic = dict(self._host_traffic)
+            traffic = {ip: dict(c) for ip, c in self._host_traffic.items()}
+        use_netflow = self.netflow and self._traffic_source == 'netflow-buckets'
+        by_mac = self.netflow.snapshot() if use_netflow else {}
         hosts = []
         for entry in self._get_neighbors_raw():
             mac = entry['mac']
             first = self._host_seen.setdefault(mac, now)
-            counters = traffic.get(entry['ip'], {})
+            counters = by_mac.get(mac, {}) if use_netflow else traffic.get(entry['ip'], {})
             host = {
                 'mac': mac,
                 'ip': entry['ip'],
@@ -629,6 +656,10 @@ class OPNSenseCollector(FreeBSDCollector):
             }
             if entry.get('hostname'):
                 host['hostname'] = entry['hostname']
+            if entry.get('realif'):
+                host['realif'] = entry['realif']
+            if entry.get('oui'):
+                host['oui'] = entry['oui']
             hosts.append(host)
         return hosts
 
@@ -655,21 +686,33 @@ class OPNSenseCollector(FreeBSDCollector):
                 logger.debug('Traffic sample failed: %s', e)
             if self.dpi:
                 try:
+                    self.dpi.exclude_macs(self.data.get('macs', {}).values())
                     self.dpi.poll()
                 except Exception as e:
                     logger.debug('Zenarmor DPI poll failed: %s', e)
             time.sleep(max(1, interval - (time.time() - started)))
 
     def sample_traffic(self, elapsed):
-        """Update per-client counters: exact totals from Insight (Netflow)
-        when local collection is enabled, otherwise estimates from iftop."""
+        """Fold Netflow observations, otherwise estimate from iftop samples."""
         if self._insight_enabled():
             try:
+                if self.netflow:
+                    self.netflow.poll(self._lan_devices())
+                    if self._traffic_source != 'netflow-buckets':
+                        logger.info('Client traffic accounting: local Netflow LAN buckets')
+                    self._traffic_source = 'netflow-buckets'
+                    return
                 self._sample_insight()
+                self._traffic_source = 'insight-api'
                 return
-            except OPNsenseAPIError as e:
-                logger.debug('Insight query failed, using iftop: %s', e)
+            except (OPNsenseAPIError, sqlite3.Error, OSError, ValueError, TypeError) as e:
+                logger.warning('Netflow sample failed; retaining confirmed counters: %s', e)
+                return
+        # Once real counters are in use, estimates must not contaminate them.
+        if self._traffic_source in ('netflow-buckets', 'insight-api'):
+            return
         self._sample_iftop(elapsed)
+        self._traffic_source = 'iftop-estimate'
 
     def _insight_enabled(self):
         status = self._call(

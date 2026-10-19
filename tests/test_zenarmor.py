@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from collectors.zenarmor import ZenarmorDPI, classify, OTHER_APP, UNKNOWN_CAT
+from collectors.countries import country_code
 
 
 def make_db(path):
@@ -35,6 +36,12 @@ class TestClassify:
         ('Steam', 'Gaming', None),                             # unique word match
         ('Some Brand New App', 'Gaming', (8, OTHER_APP)),      # category fallback
         ('Mystery', 'Never Heard Of It', (UNKNOWN_CAT, OTHER_APP)),
+        ('Secure Shell', 'Remote Access', (10, 21)),
+        ('Discord IM', 'Instant Messaging', (6, 33)),
+        ('Quic UDP Connection', 'Media Streaming', (13, 190)),
+        ('Samsung Cloud', 'Cloud Services', (13, OTHER_APP)),
+        ('Steam Tracker', 'Ad Tracker', (13, OTHER_APP)),
+        ('Claude', 'A.I. Tools', (17, OTHER_APP)),
     ])
     def test_mapping(self, app, cat, expected):
         result = classify(app, cat)
@@ -84,3 +91,72 @@ class TestPolling:
 
     def test_unavailable(self, tmp_path):
         assert ZenarmorDPI(str(tmp_path / 'missing.sqlite')).available is False
+
+    def test_countries_inbound_direction_and_invalid_macs(self, tmp_path):
+        conn = make_db(tmp_path / 'conn.sqlite')
+        for field in ('direction', 'dst_hwaddr', 'dst_country_name', 'src_country_name'):
+            conn.execute('alter table conn_all add column %s text' % field)
+        dpi = ZenarmorDPI(str(tmp_path / 'conn.sqlite'))
+        dpi.poll()
+        conn.execute('insert into conn_all (src_hwaddr,dst_hwaddr,direction,app_name,'
+                     'app_category,src_nbytes,dst_nbytes,src_npackets,dst_npackets,'
+                     'src_country_name) values (?,?,?,?,?,?,?,?,?,?)',
+                     ('112233445566', 'aabbcc000001', 'in', 'YouTube',
+                      'Media Streaming', 900, 20, 9, 2, 'United States'))
+        conn.commit()
+        for raw in ('000000000000', 'ffffffffffff', 'zzzzzzzzzzzz', '010000000001'):
+            add(conn, raw, 'YouTube', 'Media Streaming', 100, 100)
+        dpi.poll()
+        [client] = dpi.payload()
+        assert client['mac'] == 'aa:bb:cc:00:00:01'
+        stat = client['stats'][0]
+        assert (stat['rx_bytes'], stat['tx_bytes'], stat['rx_packets'], stat['tx_packets']) == (900, 20, 9, 2)
+        assert stat['countries'] == [{'iso': 'US', 'rx_bytes': 900, 'tx_bytes': 20}]
+
+    def test_resume_does_not_skip_new_rows_or_replay_counters(self, tmp_path):
+        path = tmp_path / 'conn.sqlite'
+        state = tmp_path / 'dpi.json'
+        conn = make_db(path)
+        dpi = ZenarmorDPI(str(path), str(state))
+        dpi.poll()
+        add(conn, 'aabbcc000001', 'YouTube', 'Media Streaming', 10, 100)
+        dpi.poll()
+        restored = ZenarmorDPI(str(path), str(state))
+        assert restored.initialized == dpi.initialized
+        assert restored.payload() == dpi.payload()
+        assert restored.poll() == 0
+        add(conn, 'aabbcc000001', 'YouTube', 'Media Streaming', 20, 200)
+        restored.poll()
+        assert restored.payload()[0]['stats'][0]['rx_bytes'] == 300
+
+    def test_database_replaced_with_larger_ids_and_different_uuids(self, tmp_path):
+        path = tmp_path / 'conn.sqlite'
+        conn = make_db(path)
+        conn.execute('alter table conn_all add column conn_uuid text')
+        add(conn, 'aabbcc000001', 'YouTube', 'Media Streaming', 1, 2)
+        conn.execute("update conn_all set conn_uuid='old'")
+        conn.commit()
+        dpi = ZenarmorDPI(str(path))
+        dpi.poll()
+        conn.execute('delete from conn_all')
+        add(conn, 'aabbcc000001', 'YouTube', 'Media Streaming', 7, 9)
+        conn.execute("update conn_all set conn_uuid='new'")
+        conn.commit()
+        add(conn, 'aabbcc000001', 'YouTube', 'Media Streaming', 3, 5)
+        assert dpi.poll() == 2
+        assert dpi.payload()[0]['stats'][0]['rx_bytes'] == 14
+
+    def test_router_macs_are_excluded(self, tmp_path):
+        conn = make_db(tmp_path / 'conn.sqlite')
+        dpi = ZenarmorDPI(str(tmp_path / 'conn.sqlite'))
+        dpi.poll()
+        dpi.exclude_macs(['aa:bb:cc:00:00:01'])
+        add(conn, 'aabbcc000001', 'YouTube', 'Media Streaming', 10, 100)
+        dpi.poll()
+        assert dpi.payload() == []
+
+
+@pytest.mark.parametrize('name,iso', [('United States', 'US'), ('The Netherlands', 'NL'),
+                                  ('South Korea', 'KR'), ('KE', 'KE'), ('', None), ('unknown', None)])
+def test_country_code(name, iso):
+    assert country_code(name) == iso

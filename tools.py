@@ -108,6 +108,8 @@ def get_network_table(data, ports):
     lan_if = [d['ifname'] for d in ports if d['type'].lower() == 'lan'][0]
     wan_if = [d['ifname'] for d in ports if d['type'].lower() == 'wan'][0]
     network_table = []
+    lan_ports = {p['ifname']: p.get('realif') for p in ports
+                 if p['type'].lower().startswith('lan')}
 
     for iface in if_list:
         if iface not in data.get('ip', {}):
@@ -127,8 +129,12 @@ def get_network_table(data, ports):
             'stats': get_net_stats(data, iface),
             'up': 'true',
         }
-        if iface == lan_if:
-            net_entry['host_table'] = data.get('host_table', [])
+        if iface in lan_ports:
+            net_entry['host_table'] = [
+                {k: v for k, v in host.items() if k != 'realif'}
+                for host in data.get('host_table', [])
+                if (host.get('realif') == lan_ports[iface] if host.get('realif')
+                    else iface == lan_if)]
         elif iface == wan_if:
             if 'gateway' in data['ip'].get(iface, {}):
                 net_entry['gateways'] = [data['ip'][iface]['gateway']]

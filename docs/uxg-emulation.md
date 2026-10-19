@@ -94,6 +94,22 @@ live test adoption in a lab controller:
 
 ## Next steps
 
+### Additional telemetry investigation (2026-10-19)
+
+The UXG inform processor also accepts a `connections` list independently of the
+RabbitMQ ingestion path. Its parser reads timestamp, hostnames, source and
+destination IP/port/protocol, interfaces, country/region and byte/packet stats.
+This path converts entries into allowed conntrack events; it cannot faithfully
+carry Zenarmor blocked decisions or application classifications in those fields.
+A lab inform containing a synthetic connection received a normal controller
+response, but the traffic-flows API remained empty at the initial check.
+Receiving an inform response therefore does not establish flow persistence or
+UI support. Production does not emit experimental connections.
+
+Production enrichment combines Zenarmor application/country counters with
+persistent Netflow client accounting. It preserves the UGW3 identity while
+UDAPI provisioning and full flow ingestion remain under investigation.
+
 1. Verify the visible application-usage UI against the populated five-minute
    user reports. Do not use the retired stadpi/sitedpi endpoints as evidence.
    The real UGW3 emulator received the camel-case conversion on 2026-10-19;

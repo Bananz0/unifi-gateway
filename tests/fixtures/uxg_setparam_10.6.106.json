@@ -1,0 +1,681 @@
+{
+ "_note": "setparam from UniFi Network 10.6.106 to an emulated UXGB (UXG-Max) in a lab controller; secrets redacted",
+ "blocked_sta": "",
+ "cfgversion": "d939f9148878909d",
+ "mgmt_cfg_keys": [
+  "capability",
+  "selfrun_guest_mode",
+  "cfgversion",
+  "led_enabled",
+  "stun_url",
+  "mgmt_url",
+  "use_aes_gcm",
+  "report_crash"
+ ],
+ "noop_example": {
+  "_type": "noop",
+  "include_blocks": [
+   "ipv4_active_leases",
+   "gw_caps"
+  ],
+  "interval": 10,
+  "live_update": false,
+  "server_time_in_utc": "1792440355255"
+ },
+ "system_cfg": {
+  "ubntconf": "# misc\n# unifi\nunifi.version=10.6.106\nunifi.anonymous_controller_id=028a3c0d-7ac7-4689-a176-b91632aa2ca0\nunifi.anonymous_site_id=a884a823-e99e-440b-b0f7-059887610d6e\nunifi.reporterid=028a3c0d-7ac7-4689-a176-b91632aa2ca0\nunifi.siteid=6ad677a33b3b84feb42f9ea7\nunifi.idp=enabled\nunifi.mcip=239.254.127.63\nunifi.key=<redacted>\nunifi.feature.always_send_crash_logs=enabled\nunifi.cfgcap_info=0x7\n# qos\nqos.status=disabled\n# ebtables\nebtables.status=disabled\n# ipset\nipset.status=disabled\n# redirector\nredirector.status=disabled\n# system\nsystem.analytics.status=disabled\nsystem.monitor.memory.threshold=90\nsystem.monitor.critical_memory.threshold=95\nsystem.timezone=EAT-3\nlocale.timezone=EAT-3\n",
+  "udapi": {
+   "firewall/filter": [
+    {
+     "config": {
+      "logDefault": false,
+      "name": "INPUT",
+      "policy": "ACCEPT"
+     },
+     "rules": [
+      {
+       "description": "LAN_LOCAL jump (interface: br0)",
+       "id": 30001,
+       "inInterface": {
+        "id": "br0"
+       },
+       "ipVersion": "both",
+       "target": "LAN_LOCAL"
+      }
+     ]
+    },
+    {
+     "config": {
+      "logDefault": false,
+      "name": "FORWARD",
+      "policy": "ACCEPT"
+     },
+     "rules": [
+      {
+       "description": "FORWARD_IN jump",
+       "id": 30001,
+       "ipVersion": "both",
+       "target": "FORWARD_IN"
+      },
+      {
+       "description": "FORWARD_OUT jump",
+       "id": 30002,
+       "ipVersion": "both",
+       "target": "FORWARD_OUT"
+      }
+     ]
+    },
+    {
+     "config": {
+      "logDefault": false,
+      "name": "OUTPUT",
+      "policy": "ACCEPT"
+     }
+    },
+    {
+     "config": {
+      "logDefault": false,
+      "name": "FORWARD_IN"
+     },
+     "rules": [
+      {
+       "description": "LAN_IN jump (interface: br0)",
+       "id": 30001,
+       "inInterface": {
+        "id": "br0"
+       },
+       "ipVersion": "both",
+       "target": "LAN_IN"
+      }
+     ]
+    },
+    {
+     "config": {
+      "logDefault": false,
+      "name": "FORWARD_OUT"
+     },
+     "rules": [
+      {
+       "description": "LAN_OUT jump (interface: br0)",
+       "id": 30001,
+       "ipVersion": "both",
+       "outInterface": {
+        "id": "br0"
+       },
+       "target": "LAN_OUT"
+      }
+     ]
+    },
+    {
+     "config": {
+      "logDefault": false,
+      "name": "LAN_LOCAL"
+     },
+     "rules": [
+      {
+       "id": 2147483646,
+       "ipVersion": "v6only",
+       "log": false,
+       "target": "RETURN"
+      },
+      {
+       "id": 2147483647,
+       "ipVersion": "v4only",
+       "log": false,
+       "target": "RETURN"
+      }
+     ]
+    },
+    {
+     "config": {
+      "logDefault": false,
+      "name": "LAN_IN"
+     },
+     "rules": [
+      {
+       "description": "[LAN_IN]Allow Network 192.168.1.0/24 Traffic",
+       "id": 60001,
+       "ipVersion": "v4only",
+       "source": {
+        "address": "192.168.1.0/24"
+       },
+       "target": "RETURN"
+      },
+      {
+       "id": 2147483646,
+       "ipVersion": "v6only",
+       "log": false,
+       "target": "RETURN"
+      },
+      {
+       "id": 2147483647,
+       "ipVersion": "v4only",
+       "log": false,
+       "target": "RETURN"
+      }
+     ]
+    },
+    {
+     "config": {
+      "logDefault": false,
+      "name": "LAN_OUT"
+     },
+     "rules": [
+      {
+       "description": "[LAN_OUT]Allow Network 192.168.1.0/24 Traffic",
+       "destination": {
+        "address": "192.168.1.0/24"
+       },
+       "id": 60001,
+       "ipVersion": "v4only",
+       "target": "RETURN"
+      },
+      {
+       "description": "[LANv6_OUT]Allow Virtual Network Traffic",
+       "destination": {
+        "sets": [
+         "corporate_networkv6"
+        ]
+       },
+       "id": 60002,
+       "ipVersion": "v6only",
+       "target": "RETURN"
+      },
+      {
+       "id": 2147483646,
+       "ipVersion": "v6only",
+       "log": false,
+       "target": "RETURN"
+      },
+      {
+       "id": 2147483647,
+       "ipVersion": "v4only",
+       "log": false,
+       "target": "RETURN"
+      }
+     ]
+    }
+   ],
+   "firewall/nat": [],
+   "firewall/sets": [
+    {
+     "description": "UniFi addresses",
+     "identification": {
+      "name": "unifi_controller_addresse",
+      "type": "address"
+     }
+    },
+    {
+     "description": "guest subnets",
+     "identification": {
+      "name": "guest_network",
+      "type": "address"
+     }
+    },
+    {
+     "description": "IPv6 guest subnets",
+     "identification": {
+      "name": "guest_networkv6",
+      "type": "address"
+     }
+    },
+    {
+     "description": "corporate subnets",
+     "entries": [
+      "192.168.1.0/24"
+     ],
+     "identification": {
+      "name": "corporate_network",
+      "type": "address"
+     }
+    },
+    {
+     "description": "IPv6 corporate subnets",
+     "identification": {
+      "name": "corporate_networkv6",
+      "type": "address"
+     }
+    },
+    {
+     "description": "local subnets (corporate + guest)",
+     "entries": [
+      "192.168.1.0/24"
+     ],
+     "identification": {
+      "name": "local_network",
+      "type": "address"
+     }
+    },
+    {
+     "description": "IPv6 local subnets (corporate + guest)",
+     "identification": {
+      "name": "local_networkv6",
+      "type": "address"
+     }
+    },
+    {
+     "description": "Remote User VPN subnets",
+     "identification": {
+      "name": "remote_user_vpn_network",
+      "type": "address"
+     }
+    },
+    {
+     "description": "remote client VPN subnets",
+     "identification": {
+      "name": "remote_client_vpn_network",
+      "type": "address"
+     }
+    },
+    {
+     "description": "remote site VPN subnets",
+     "identification": {
+      "name": "remote_site_vpn_network",
+      "type": "address"
+     }
+    },
+    {
+     "description": "allow dns servers for guests",
+     "identification": {
+      "name": "guest_allow_dns_servers",
+      "type": "address"
+     }
+    },
+    {
+     "description": "captive portal subnets",
+     "identification": {
+      "name": "captive_portal_subnets",
+      "type": "address"
+     }
+    },
+    {
+     "description": "guest portal address",
+     "entries": [
+      "100.96.39.4"
+     ],
+     "identification": {
+      "name": "guest_portal_address",
+      "type": "address"
+     }
+    },
+    {
+     "identification": {
+      "name": "wlanconf_1",
+      "type": "mac"
+     }
+    },
+    {
+     "description": "guest portal ports",
+     "entries": [
+      "8880",
+      "8843"
+     ],
+     "identification": {
+      "name": "guest_portal_ports",
+      "type": "port"
+     }
+    },
+    {
+     "description": "guest portal redirector ports",
+     "entries": [
+      "39080",
+      "39443"
+     ],
+     "identification": {
+      "name": "guest_portal_redirector_p",
+      "type": "port"
+     }
+    },
+    {
+     "description": "unifi tcp ports",
+     "entries": [
+      "8080"
+     ],
+     "identification": {
+      "name": "unifi_controller_ports-tc",
+      "type": "port"
+     }
+    },
+    {
+     "description": "unifi udp ports",
+     "entries": [
+      "3478"
+     ],
+     "identification": {
+      "name": "unifi_controller_ports-ud",
+      "type": "port"
+     }
+    }
+   ],
+   "firewall/settings": {
+    "conntrackModules": {
+     "ftp": true,
+     "gre": true,
+     "h323": true,
+     "pptp": true,
+     "sip": false,
+     "tftp": true
+    },
+    "conntrackTimeouts": {
+     "icmp": 30,
+     "other": 600,
+     "tcpClose": 10,
+     "tcpCloseWait": 60,
+     "tcpEstablished": 7440,
+     "tcpFinWait": 120,
+     "tcpLastAck": 30,
+     "tcpSynRecv": 60,
+     "tcpSynSent": 120,
+     "tcpTimeWait": 120,
+     "udpOther": 30,
+     "udpStream": 180
+    }
+   },
+   "interfaces": [
+    {
+     "addresses": [
+      {
+       "cidr": "127.0.0.1/8",
+       "type": "static",
+       "version": "v4"
+      }
+     ],
+     "identification": {
+      "id": "lo",
+      "type": "loopback"
+     },
+     "status": {
+      "enabled": true,
+      "mtu": 65536
+     }
+    },
+    {
+     "identification": {
+      "id": "switch0",
+      "type": "switch"
+     },
+     "status": {
+      "enabled": true
+     },
+     "switch": {
+      "ports": [],
+      "vlanEnabled": true
+     }
+    },
+    {
+     "identification": {
+      "id": "switch0.1",
+      "type": "vlan"
+     },
+     "status": {
+      "enabled": true
+     },
+     "vlan": {
+      "id": 1,
+      "interface": {
+       "id": "switch0"
+      }
+     }
+    },
+    {
+     "addresses": [
+      {
+       "cidr": "192.168.1.1/24",
+       "type": "static",
+       "version": "v4"
+      }
+     ],
+     "bridge": {
+      "id": 0,
+      "interfaces": [
+       {
+        "id": "switch0.1"
+       }
+      ]
+     },
+     "identification": {
+      "id": "br0",
+      "type": "bridge"
+     },
+     "status": {
+      "comment": "LAN",
+      "enabled": true
+     }
+    },
+    {
+     "identification": {
+      "id": "eth0",
+      "type": "ethernet"
+     },
+     "status": {
+      "enabled": false
+     }
+    },
+    {
+     "identification": {
+      "id": "eth1",
+      "type": "ethernet"
+     },
+     "status": {
+      "enabled": false
+     }
+    },
+    {
+     "identification": {
+      "id": "eth2",
+      "type": "ethernet"
+     },
+     "status": {
+      "enabled": false
+     }
+    },
+    {
+     "identification": {
+      "id": "eth3",
+      "type": "ethernet"
+     },
+     "status": {
+      "enabled": false
+     }
+    },
+    {
+     "identification": {
+      "id": "eth4",
+      "type": "ethernet"
+     },
+     "status": {
+      "enabled": false
+     }
+    }
+   ],
+   "routes/static": [],
+   "services": {
+    "arpInspection": {
+     "enabled": false,
+     "interfaces": [
+      {
+       "id": "dummy"
+      }
+     ]
+    },
+    "bleHTTPTransport": {
+     "advertiseIPv4": null,
+     "advertiseMAC": null,
+     "advertiseName": null,
+     "enabled": true,
+     "httpHostAddress": "https://127.0.0.1:443",
+     "serviceUUID": null
+    },
+    "dhcpServers": [
+     {
+      "dnsServers": [
+       "192.168.1.1"
+      ],
+      "domain": "localdomain",
+      "enabled": true,
+      "gatewayAddress": "192.168.1.1",
+      "interfaces": [
+       {
+        "id": "br0"
+       }
+      ],
+      "ipVersion": "v4",
+      "ipv4Netmask": 24,
+      "leaseTime": 86400,
+      "name": "net_Default_br0_192-168-1-0-24",
+      "rangeStart": "192.168.1.6",
+      "rangeStop": "192.168.1.254",
+      "staticLeases": [
+       {
+        "addresses": [
+         "192.168.1.20"
+        ],
+        "id": "00:00:00:00:00:00"
+       }
+      ]
+     }
+    ],
+    "dnsForwarder": {
+     "enabled": true,
+     "forwardBehavior": "allServers",
+     "hostRecords": [
+      {
+       "address": {
+        "address": "172.25.0.3",
+        "version": "v4"
+       },
+       "hostName": "unifi.localdomain",
+       "registerNonQualified": true
+      },
+      {
+       "address": {
+        "address": "192.168.1.1",
+        "version": "v4"
+       },
+       "hostName": "setup.ui.com",
+       "registerNonQualified": false
+      },
+      {
+       "address": {
+        "address": "192.168.1.1",
+        "version": "v4"
+       },
+       "hostName": "uxg-probe.localdomain",
+       "registerNonQualified": true
+      },
+      {
+       "address": {
+        "address": "192.168.1.1",
+        "version": "v4"
+       },
+       "hostName": "*.devices.wifiman.me",
+       "registerNonQualified": false
+      }
+     ],
+     "listenInterfaces": [
+      {
+       "id": "br0"
+      }
+     ]
+    },
+    "idsIps": {
+     "alien": false,
+     "enabled": false,
+     "signatureScheduler": 0,
+     "tor": false
+    },
+    "lldp": {
+     "enabled": false
+    },
+    "mdns": {
+     "enabled": true,
+     "interfaces": [
+      {
+       "id": "br0"
+      }
+     ],
+     "reflectFilter": []
+    },
+    "ntpClient": {
+     "enabled": true,
+     "ntpServers": [
+      "0.ubnt.pool.ntp.org",
+      "1.ubnt.pool.ntp.org",
+      "2.ubnt.pool.ntp.org",
+      "3.ubnt.pool.ntp.org"
+     ]
+    },
+    "sshServer": {
+     "enabled": true,
+     "sshPort": 22
+    },
+    "systemLog": {
+     "enabled": true,
+     "level": "info",
+     "port": 5514,
+     "prefix": "uxg-probe",
+     "server": "100.96.39.4"
+    },
+    "unifiNetwork": {
+     "certificate": {
+      "crt": "MIIE1jCCAr6gAwIBAgIJAIxDeq6fbxfdMA0GCSqGSIb3DQEBDAUAMBAxDjAMBgNVBAMTBXVuaWZpMB4XDTI2MTAxOTIwMDMzM1oXDTM2MTAxNjIwMDMzM1owEDEOMAwGA1UEAxMFdW5pZmkwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCvsBMOXGXkKcq0jABI4h1bwr8r9MDPZ2v3dOWm3nc9hR7iVJprJVa8/xdHoFVKjQJQeL35v1N0KY7HEajxvKq+anOs87HH1aTFi4IyVW1a9BTKx9CdWFhwGy5v6XVwENpVQ5okAiZd87TIqOC2+ZUhBoA7QYFBOANa8tlZK12Hpbp5alj9pAuEZweITNcFsK884AcdjEDWLGzXpeqtV+LcdQZ5Pqf0oCu/Ha2c2P0QfMbGGkKT/rri5GZNC6OkNed3pAOfmwXcbyZm4n/UiHjDwMnK82REAYdC0kv02fqRQl5lTVGVPyQHOhoZWt5WXivZfxur1uG+5hQmnWLC6rkdQnw1lUeaRSu7LsoaR7CWtKggPRsNngD0XZaVRw9UDOgsr4UcG2N8+yKNlvip7ofAqLqrCbhAiVUO3YLn4yRmWQBpBpCBPjjuwTD3nV7hA8QWkvWI5ZAcves6fj3k1BZ211gCvO8iFD42WBGFyqBnkgqzICkHSv7Sn+CdHvxhX9TmTp7d2iCB5bEeKrmhozG95Hz5BXwJPxE5Ou42YYIhtTzBjTEgl/R8I3JKHJd64KAwafTV9NO5A37pN+tV0cuIOS1QIi5PJFi6l/rxG0AogB7kQVSGsJJR/SMyKk+Fg016ZZcEUFZhHOBYb65qTDsZ36Ln+4KGgCoNblW6MN1qaQIDAQABozMwMTAdBgNVHQ4EFgQUNUlUUUdryhNlKt9o0bG+uOGg0pkwEAYDVR0RBAkwB4IFdW5pZmkwDQYJKoZIhvcNAQEMBQADggIBADDvtLaU0lqNqzM7B58Qsnnx/eVCbdMT0yZ7C0LaUWVGzKN+b/OXg1Zr02XCL/lLgGWchiQPMtDu7uEzUM7ydj0lMwxMRD9xZiY1TFwTaVidzOoJRSYYmarm6PI3Cm9Q1C5EkCmI0/NriMBRQfV50Nu/ajhXYZTKqzPe2Z+GHGhl0Us9GJ7sU5o13HNtVtF3nANmgdWHfXF4GJja8t3qIeuNlIVDX9BRKIv94hqUAQ92D6fuvQrvzdoIkGdqHN0xdAZUpTMc0i5zxE8ffZmwFz5TqwiEecL/BywHFg5DYHhOU/Xle7EVfedORTerztilYkep6CqwnV65HIPJGAdeLE/o0a5lc+MaPElHHJ5L9aZeJ1nmbV1XhR5i9RyWIr5dCWT4MkUDzPK4UXU0kEDTzrNwvhH7rC0Kgnhog0agn/0+Rbe1ttMTO/EEjEgWMk5L6SkdxwnaMClzR83M3UenidpWzdp5ADEnugVEFIDdTUX2zi24/QzVClz2vn6GHORh+TFkTBYzOBw5vpZRLhKQ52JO39vNjcdyMpSrMYB1JJ4WIdQS9FEG9OYu7z4mAASSBECgDhnoeyOzCRilUpek7C2sz6uk9YiQD1SaqomYhfXKLBP2vO5W/AR/cSGF1Orvtl3dwHk7GSkzNS/j1WJVz6ngv8bnfrFBJKV6zrBiJxXI"
+     },
+     "controllerURL": "https://100.96.39.4:8443",
+     "enabled": true,
+     "informURL": "http://100.96.39.4:8080/inform",
+     "sitename": "default",
+     "token": "FhJfoN0Z5pFw0qFPQlYKRMrYaUumW2a7pB2MCdIjMFy5LndByZQnI8tA3DvWTt2x"
+    },
+    "wifiman": {
+     "enabled": true,
+     "token": "FhJfoN0Z5pFw0qFPQlYKRMrYaUumW2a7pB2MCdIjMFy5LndByZQnI8tA3DvWTt2x"
+    }
+   },
+   "services/radius-profiles": [
+    {
+     "authServers": [
+      {
+       "address": "192.168.1.1",
+       "port": 1812,
+       "secret": "<redacted>"
+      }
+     ],
+     "id": "6ad677a33b3b84feb42f9eb8",
+     "name": "Default",
+     "vlanForWiredNetwork": false,
+     "vlanForWirelessNetwork": false
+    }
+   ],
+   "system": {
+    "arp": {
+     "baseReachableTime": 600
+    },
+    "dnsServers": [
+     {
+      "address": "1.1.1.1",
+      "interface": "lo",
+      "priority": 1,
+      "type": "static",
+      "version": "v4"
+     }
+    ],
+    "domainName": "localdomain",
+    "fwReleaseChannel": "release",
+    "hostname": "uxg-probe",
+    "timezone": "Africa/Nairobi",
+    "users": [
+     {
+      "aliases": [
+       "labadmin"
+      ],
+      "password": "<redacted>",
+      "readOnly": true,
+      "username": "root"
+     }
+    ]
+   },
+   "unifi": {},
+   "version": 1
+  }
+ }
+}

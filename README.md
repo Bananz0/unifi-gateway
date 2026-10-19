@@ -183,7 +183,7 @@ api_secret = ...
 |---|---|
 | Interface counters, MAC, IP, link speed, WAN type | `diagnostics/traffic/interface`, `interfaces/overview` |
 | Clients (online, hostname, last seen) | ARP table + Host discovery (hostwatch) + DHCP leases |
-| Per-client traffic | Exact byte/packet totals from Insight when Netflow local capture is on (recommended: capture LAN, WAN as egress-only); otherwise estimated from `diagnostics/traffic/top` samples |
+| Per-client traffic | Persistent byte/packet totals from local five-minute Netflow buckets, restricted to configured LAN interfaces to avoid counting WAN observations twice; reporting is delayed by the exporter. Remote API fallback is coarser; without Netflow, `diagnostics/traffic/top` provides estimates. |
 | DHCP leases | ISC (`os-isc-dhcp`), Kea or Dnsmasq — whichever is running |
 | WAN latency, gateway, DNS servers | `routes/gateway/status`, Unbound |
 | CPU, memory, uptime | `diagnostics/system`, `diagnostics/activity` |
@@ -207,6 +207,17 @@ api_secret = ...
 **Mirroring OPNsense into UniFi:** add a `[unifi]` section (`url`, `username`, `password`, optional `site`, `mirror_interval`) with a local controller admin account. Every `mirror_interval` seconds (default 300), the daemon copies OPNsense's own WAN port forwards, aliases (as firewall groups), LAN/WAN firewall rules, DHCP reservations (as client fixed IPs) and static routes into the controller. Mirrored objects are named `[OPNsense] …` (clients get it in their note). OPNsense stays the source: they're refreshed from it and removed when the original goes away. When the controller pushes them back, the gateway skips them, so nothing is duplicated. Anything UniFi can't express (e.g. several ports forwarded to one, LAN-side redirects, rules on other interfaces) is skipped with a log warning.
 
 **DPI / Insights:** if Zenarmor is installed, per-client application stats are read from its reporting database (`dpi = auto`, `zenarmor_db` in `[opnsense]`). Reports include the legacy USG fields and the modern `dpi_stats` format with camel-case counters. Saved client application statistics are confirmed on Network 10.6 for both UXG-Max and USG emulation, including real production USG reports. Visible Insights pages and connection Flows still need separate validation. The UXG configuration translator is not implemented; do not switch production to a UXG identity yet. See [UXG findings](docs/uxg-emulation.md); the retired `stadpi`/`sitedpi` endpoints always return empty results on 10.6.
+
+Zenarmor reports include per-application country byte totals where geography is
+known. Inbound connections use the destination client's MAC and reverse the
+traffic direction; router interface MACs and invalid MACs are excluded.
+Application mapping prefers exact names and explicit aliases, leaving unknown
+applications in their category instead of guessing from a brand name. Counters
+and database cursors survive daemon restarts in private JSON files alongside
+the OPNsense state file. A fresh installation establishes a baseline without
+replaying old history. Netflow totals follow observed interface/IP/MAC ownership;
+ambiguous address-change buckets remain unattributed. Client counters refresh
+each inform and clients are assigned to their observed LAN.
 
 **Running from source on OPNsense:** OPNsense doesn't ship psutil or pycryptodome, and neither is required here — the inform encryption falls back to the `cryptography` package OPNsense already includes, and host stats come from the API. Copy the sources to e.g. `/usr/local/lib/unifi-gateway` and run `python3 unifi_gateway.py run`.
 
