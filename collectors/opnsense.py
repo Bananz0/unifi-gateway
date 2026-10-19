@@ -31,6 +31,7 @@ from . import base
 from .freebsd import FreeBSDCollector
 from .opnsense_api import OPNsenseAPI, OPNsenseAPIError
 from .opnsense_sync import OPNsenseConfigSync, normalize_mac
+from .opnsense_udapi import UDAPIConfigSync, is_udapi_config
 from .zenarmor import ZenarmorDPI
 from .netflow import NetflowTotals
 from .unifi_mirror import OPNsenseMirror, UniFiController
@@ -121,13 +122,18 @@ class OPNSenseCollector(FreeBSDCollector):
                 logger.warning('Zenarmor database %s not found, DPI disabled', dpi.db_path)
         self._state = self._load_state()
         self.sync = None
+        self.udapi_sync = None
         if self.api:
+            options = {k: self._bool(k) for k in (
+                'apply_firewall', 'apply_port_forward', 'apply_dhcp',
+                'apply_dns', 'apply_routes')}
             self.sync = OPNsenseConfigSync(
                 self.api, self.port_identifier, self.lan_identifiers,
-                options={k: self._bool(k) for k in (
-                    'apply_firewall', 'apply_port_forward', 'apply_dhcp',
-                    'apply_dns', 'apply_routes')},
-            )
+                options=options)
+            # UXG-class devices are provisioned with a UDAPI tree instead.
+            self.udapi_sync = UDAPIConfigSync(
+                self.api, self.port_identifier, self.lan_identifiers,
+                options=options)
         super().__init__(config)
 
     # ── Options / state ──────────────────────────────────────────────────
@@ -833,7 +839,8 @@ class OPNSenseCollector(FreeBSDCollector):
         digest = _digest(cfg)
         if not force and digest == self._state.get('system_cfg_hash'):
             return True
-        summary = self.sync.apply_system_cfg(cfg)
+        sync = self.udapi_sync if is_udapi_config(cfg) else self.sync
+        summary = sync.apply_system_cfg(cfg)
         logger.info('Applied controller config to OPNsense: %s', json.dumps(summary))
         self._state['system_cfg_hash'] = digest
         self._save_state()

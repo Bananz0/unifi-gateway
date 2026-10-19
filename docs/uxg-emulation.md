@@ -1,7 +1,7 @@
 # UXG emulation: findings and next steps
 
 Status as of 2026-10-19. The working USG (UGW3) emulation with OPNsense
-integration is on branch `feat/opnsense-api`. This note records what was
+integration is on branch `feat/opnsense-api`; UXG mode is on `feat/uxg-mode`. This note records what was
 learned while investigating a move to emulating a UniFi Gateway Max
 (UXG-class) device, so the work can continue elsewhere.
 
@@ -92,6 +92,89 @@ live test adoption in a lab controller:
   environment service defaults its broker TLS port to 5671 (`rmq.tls_port`).
   This is a lead for further isolated testing, not a verified flow integration.
 
+## UXG mode (branch `feat/uxg-mode`)
+
+Set `device = UXGB` (or `UXG`, `UXGPRO`, `UXGA6AA`) in `[gateway]`, with
+`device_display = UniFi Gateway Max` and a UXG firmware such as
+`5.1.26.33914`. Any other model keeps the unchanged USG code paths.
+
+### Implemented
+
+- **Inform payload** (`unifi_protocol._create_uxg_inform`, chosen by
+  `create_inform` from the model): identity fields as in the lab probe plus
+  `udapi_version`, `port_table` (one entry per configured port, with
+  `port_idx`, `mac`, `num_port`, `ifname`, counters, `is_uplink` on the WAN and
+  a `mac_table` built from the collector's host table, assigned to ports by
+  `realif` like `network_table` does for the USG), `ipv4_active_leases`
+  (with `network` and, for epoch expiries, `expiration`), `if_table`,
+  `network_table` (no `host_table`; LAN entries renamed to their UDAPI
+  interface: a port's `network` key, else `br0` for the primary LAN),
+  `uplink`, `routes`, `speedtest-status`, `ddns-status`, `system-stats`, and
+  `dpi_stats` in the camel-case schema only. Ports may carry `"network"`
+  and `"vlan"` keys for additional LANs. USG output is byte-identical.
+- **include_blocks**: each `noop`'s list is sent with the next inform only.
+  `ipv4_active_leases` is always sent; `gw_caps` only when requested.
+- **blocked_sta** as a string: empty (nothing blocked, so everyone is
+  unblocked), comma/space/newline separated, or a JSON list. Lists still work.
+- **system_cfg as an object** is persisted as JSON (it used to be stored as a
+  Python repr, which could not be re-applied after a restart).
+- **UDAPI translator** (`collectors/opnsense_udapi.py`, `UDAPIConfigSync`),
+  picked by `OPNSenseCollector.apply_system_cfg` when `system_cfg` has a
+  `udapi` object. It subclasses the EdgeOS sync and reuses `sync_items`,
+  tags, alias naming, client blocking and the DHCP/DNS/route backends:
+  - chains are bound to interfaces by following jump rules from `INPUT`
+    (local) and `FORWARD` (`FORWARD_IN` with `inInterface` = in,
+    `FORWARD_OUT` with `outInterface` = out);
+  - UDAPI interface ids resolve through the `ports` map, then by subnet
+    against OPNsense's interfaces (so `br0` finds `lan`), then through bridge
+    members / VLAN / PPPoE parents;
+  - rule ids 30000-39999 and 60000+ are controller built-ins (EdgeOS ranges
+    scaled by ten, matching the capture); `[OPNsense]` mirrors are skipped,
+    also behind the controller's `[LAN_IN]`-style description prefix;
+  - targets ACCEPT/RETURN/DROP/REJECT become pass/block/reject; DNAT becomes a
+    port forward; MASQUERADE/SNAT and guest-portal DNAT are skipped;
+  - only sets a translated rule references become `ufg_` aliases;
+  - DHCP `staticLeases`, DNS `hostRecords` (minus setup.ui.com, wildcards and
+    the gateway's own name) and `routes/static` are re-expressed in the
+    EdgeOS shape and handed to the existing, live-tested backends, so their
+    tags (`dhcp-*`, `dns-*`, `route-*`) match what the USG mode created.
+
+  It fails closed because the user-rule schema is inferred: a rule with an
+  unknown field, a state-only match, a combined address+set match, mixed
+  IPv4/IPv6 literals or an unmapped interface is skipped with a warning and
+  its previously created object is kept, never broadened or deleted. A
+  section absent from the tree is left alone; a present, empty one is
+  authoritative. Rule keys are `ufw-<chain>-<id>-<if>` / `upf-<chain>-<id>-<if>`,
+  so the first UXG push replaces the USG-era `fw-*`/`pf-*` objects.
+- Tests: `tests/test_opnsense_udapi.py` (real capture + the synthetic
+  `tests/fixtures/uxg_system_cfg_synthetic.json`), `tests/test_protocol_uxg.py`,
+  and additions to the gateway/collector tests.
+
+### Needs a live lab test
+
+1. **UDAPI shape of user objects.** Create in the lab controller, then diff
+   the captured `system_cfg` against the synthetic fixture: a LAN_IN and a
+   WAN_LOCAL rule (with a port group, an address group, a MAC, a schedule, a
+   state match), a port forward with source restriction, a static route
+   (next-hop, blackhole, interface), a DHCP reservation with a name, a DNS
+   record. Check rule ids, `states`, `protocol`, `translation`,
+   `routes/static` field names and the description prefix. With Network 10's
+   zone-based firewall enabled the chain layout may differ entirely; unbound
+   chains only produce warnings.
+2. **Inform acceptance.** Run the daemon (not the probe) with `device = UXGB`
+   against the lab controller: clients appear from `port_table`/leases,
+   ports/WAN render, no controller-side parse errors for `uplink` (sent as the
+   USG-style string), `network_table` names, `vlan`, `gw_caps: {}`.
+3. **gw_caps schema** from the UXGB firmware (`mcad`); `{}` is a placeholder.
+4. **include_blocks semantics**: whether the controller expects the block
+   only once or keeps asking, and whether other blocks get requested.
+5. **blocked_sta string format** with a blocked client (separator).
+6. **OPNsense validation** of the generated objects on a real 26.x box
+   (inet46 rules with aliases, MAC aliases in rules, the `(self)` destination).
+7. **Migration**: confirm the first UXG push replaces USG-era rules as
+   intended, and that the OPNsense→UniFi mirror (`unifi_mirror.py`) still
+   works against a UXG site.
+
 ## Next steps
 
 ### Additional telemetry investigation (2026-10-19)
@@ -116,10 +199,9 @@ UDAPI provisioning and full flow ingestion remain under investigation.
    real report ingestion is confirmed. Visual lab inspection was blocked by
    its self-signed TLS certificate.
 2. Map the full UDAPI `system_cfg` schema (the probe logs every response to
-   `responses.jsonl`) and write a UDAPI → OPNsense translator.
-3. Add a UXG payload builder next to `_create_complete_inform`, selected by
-   `device = UXGB` in config.
-4. Migrate production: forget the USG, adopt the UXG identity (needs the
+   `responses.jsonl`) and replace the synthetic fixture with a real capture;
+   the translator and UXG payload exist (see above) but are only unit-tested.
+3. Migrate production: forget the USG, adopt the UXG identity (needs the
    controller to accept a model change, or a re-adopt with a new MAC).
    Do this only after UDAPI provisioning parity has been tested. The current
    EdgeOS synchronizer explicitly rejects UDAPI so it cannot delete managed

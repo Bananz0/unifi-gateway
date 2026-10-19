@@ -38,7 +38,7 @@ The codebase uses psutil for cross-platform data collection (Linux + FreeBSD). T
 **Core modules:**
 
 - `unifi_gateway.py` — Entry point and main loop. Subclasses `Daemon`, handles the inform loop (periodic POSTs to the controller), processes controller responses (`noop`, `setparam`, `reboot`, `cmd`, `upgrade`, `setdefault`). Manages adoption workflow and config persistence. Supports graceful shutdown via SIGTERM/SIGINT. Configurable via environment variables.
-- `unifi_protocol.py` — Implements the UniFi inform binary protocol. Handles AES-CBC and AES-GCM encryption/decryption, zlib/snappy compression, and builds the JSON inform payload (partial for unadopted, complete for adopted devices). Uses `MASTER_KEY` for unadopted communication, then switches to device-specific authkey after adoption.
+- `unifi_protocol.py` — Implements the UniFi inform binary protocol. Handles AES-CBC and AES-GCM encryption/decryption, zlib/snappy compression, and builds the JSON inform payload (partial for unadopted, complete for adopted devices; a UXG variant with `port_table`/`mac_table`, `udapi_version` and `include_blocks` support when `device` is a UXG model such as `UXGB`). Uses `MASTER_KEY` for unadopted communication, then switches to device-specific authkey after adoption.
 - `collectors/` — Platform-aware data collection package with class hierarchy:
   - `base.py` — `BaseCollector`: cross-platform logic via psutil (interface stats, IPs, MACs, CPU/mem, DHCP lease parsing for dnsmasq/ISC/KEA formats, DNS nameservers, latency, speedtest). Subclasses override `_get_default_gateway()` and `_get_neighbors_raw()`.
   - `linux.py` — `LinuxCollector`: `/proc/net/dev` multicast, `/sys/class/net/` MAC fallback, `/proc/net/route` gateway, `ip neigh` neighbor table.
@@ -46,6 +46,7 @@ The codebase uses psutil for cross-platform data collection (Linux + FreeBSD). T
   - `opnsense.py` — `OPNSenseCollector(FreeBSDCollector)`: OPNsense 26.x REST API integration. Reads interfaces, clients (ARP + hostwatch + ISC/Kea/Dnsmasq leases), per-client traffic (background `traffic/top` sampler), gateway latency, speedtest/ddclient plugins. Implements controller actions (block/unblock/kick client, apply `system_cfg`, reboot, speed test). Falls back to FreeBSD collection when the API is unavailable. Config in `[opnsense]`.
   - `opnsense_api.py` — stdlib-only REST client (Basic auth, unwraps configd JSON-in-JSON responses).
   - `opnsense_sync.py` — translates the controller's EdgeOS `system_cfg` into aliases, filter rules, DNAT, Kea/Dnsmasq reservations, Unbound overrides, routes; plus client blocking. Only touches objects tagged `unifi-gw:` (aliases prefixed `ufg_`); skips controller built-in rules (3000-3999, 6000+).
+  - `opnsense_udapi.py` — `UDAPIConfigSync(OPNsenseConfigSync)`: translates a UXG `system_cfg` (`{"udapi": {...}}`) into the same objects, reusing the EdgeOS sync's machinery; fails closed on unrecognized rule fields. `OPNSenseCollector.apply_system_cfg` picks it by the shape of `system_cfg`.
   - `openwrt.py` — `OpenWRTCollector(LinuxCollector)`: ubus/LuCI RPC integration (leases, host hints, conntrack).
   - `pfsense.py` — `PfSenseCollector(FreeBSDCollector)`: pfSense API integration.
   - `__init__.py` — `create_collector(config)` factory with auto-detection (`platform = auto | linux | opnsense | openwrt | pfsense | freebsd`).

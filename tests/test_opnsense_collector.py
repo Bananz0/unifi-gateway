@@ -311,6 +311,14 @@ class TestActions:
             collector.apply_system_cfg({'a': 2})
             assert apply.call_count == 2
 
+    def test_system_cfg_translator_chosen_by_shape(self, collector):
+        with patch.object(collector.sync, 'apply_system_cfg', return_value={}) as edgeos, \
+                patch.object(collector.udapi_sync, 'apply_system_cfg', return_value={}) as udapi:
+            assert collector.apply_system_cfg({'udapi': {}, 'ubntconf': ''}) is True
+            assert udapi.call_count == 1 and edgeos.call_count == 0
+            assert collector.apply_system_cfg({'firewall': {}}) is True
+            assert edgeos.call_count == 1 and udapi.call_count == 1
+
     def test_reboot_is_opt_in(self, collector):
         assert collector.reboot() is False
         collector.opts['allow_reboot'] = 'true'

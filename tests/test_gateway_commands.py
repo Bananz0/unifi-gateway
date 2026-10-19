@@ -90,6 +90,9 @@ class TestSetparam:
         ['aa:bb:cc:dd:ee:01', 'aa:bb:cc:dd:ee:02'],
         [{'mac': 'aa:bb:cc:dd:ee:01'}, {'mac': 'aa:bb:cc:dd:ee:02'}],
         'aa:bb:cc:dd:ee:01,aa:bb:cc:dd:ee:02',
+        'aa:bb:cc:dd:ee:01\naa:bb:cc:dd:ee:02\n',
+        ' aa:bb:cc:dd:ee:01 aa:bb:cc:dd:ee:02 ',
+        '["aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"]',
     ])
     def test_blocked_sta_formats(self, gateway, value):
         gateway.datacollector.set_blocked_clients.return_value = True
@@ -97,3 +100,29 @@ class TestSetparam:
         gateway.datacollector.set_blocked_clients.assert_called_once_with(
             ['aa:bb:cc:dd:ee:01', 'aa:bb:cc:dd:ee:02'])
         assert gateway._unhandled == {}
+
+    def test_uxg_empty_blocked_sta_unblocks_everyone(self, gateway):
+        gateway.datacollector.set_blocked_clients.return_value = True
+        gateway._handle_response({'_type': 'setparam', 'blocked_sta': ''})
+        gateway.datacollector.set_blocked_clients.assert_called_once_with([])
+
+    def test_uxg_system_cfg_object_is_stored_as_json(self, gateway):
+        """A UXG sends system_cfg as an object; it must survive a restart."""
+        gateway.datacollector.apply_system_cfg.return_value = True
+        cfg = {'udapi': {'firewall/filter': []}, 'ubntconf': 'a=b\nc=d'}
+        gateway._handle_response({'_type': 'setparam', 'system_cfg': cfg})
+        gateway.datacollector.apply_system_cfg.assert_called_once_with(cfg)
+        stored = gateway.config.get('provisioned', 'system_cfg')
+        assert json.loads(stored) == cfg
+        assert gateway._apply_system_cfg(stored) is True
+        assert gateway.datacollector.apply_system_cfg.call_args[0][0] == cfg
+
+
+class TestNoop:
+
+    def test_include_blocks_are_sent_once(self, gateway):
+        gateway._handle_response({'_type': 'noop', 'interval': 10,
+                                  'include_blocks': ['ipv4_active_leases', 'gw_caps']})
+        assert gateway.include_blocks == ['ipv4_active_leases', 'gw_caps']
+        gateway._handle_response({'_type': 'noop', 'interval': 10})
+        assert gateway.include_blocks == []

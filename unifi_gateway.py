@@ -5,6 +5,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -65,6 +66,8 @@ class UnifiGateway(Daemon):
 
         self.datacollector = None
         self._unhandled = {}
+        # Data blocks the controller asked for in its last noop (UXG).
+        self.include_blocks = []
         Daemon.__init__(
             self, pidfile=self.config.get('global', 'pid_file'), **kwargs
         )
@@ -168,9 +171,9 @@ class UnifiGateway(Daemon):
         while self.running:
             try:
                 self.datacollector.update()
-                response = self._send_inform(
-                    create_inform(self.config, self.datacollector)
-                )
+                blocks, self.include_blocks = self.include_blocks, []
+                response = self._send_inform(create_inform(
+                    self.config, self.datacollector, include_blocks=blocks))
                 logger.debug(
                     'Received %s from controller', response.get('_type', 'unknown')
                 )
@@ -191,6 +194,7 @@ class UnifiGateway(Daemon):
 
         if resp_type == 'noop':
             self.interval = response.get('interval', self.interval)
+            self.include_blocks = list(response.get('include_blocks') or [])
 
         elif resp_type == 'setparam':
             HANDLED_SETPARAM_KEYS = {
@@ -210,7 +214,7 @@ class UnifiGateway(Daemon):
                             'set_blocked_clients', _parse_mac_list(value)):
                         HANDLED_SETPARAM_KEYS.add(key)
                 if key not in ('_type', 'server_time_in_utc', 'blocked_sta'):
-                    self.config.set('provisioned', key, str(value))
+                    self.config.set('provisioned', key, _config_value(value))
                 if key not in HANDLED_SETPARAM_KEYS:
                     self._record_unhandled(
                         'setparam', key,
@@ -407,7 +411,7 @@ class UnifiGateway(Daemon):
                 if k == 'mgmt_cfg':
                     self._parse_mgmt_cfg(value)
                 if k not in ('_type', 'server_time_in_utc', 'blocked_sta'):
-                    self.config.set('provisioned', k, str(value))
+                    self.config.set('provisioned', k, _config_value(value))
             self._save_config()
 
     def _parse_mgmt_cfg(self, data):
@@ -463,11 +467,27 @@ class UnifiGateway(Daemon):
             self.config.write(config_file)
 
 
+def _config_value(value):
+    """Serialize a setparam value for the config file. A UXG sends system_cfg
+    as a JSON object, which must be stored as JSON (not a Python repr) so it
+    can be re-applied after a restart."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
 def _parse_mac_list(value):
     """blocked_sta may arrive as a list of MACs, a list of {'mac': ...}
-    objects, or a comma/newline separated string."""
+    objects, or a string: comma/newline/space separated (a UXG sends one,
+    empty when nothing is blocked) or a JSON-encoded list."""
     if isinstance(value, str):
-        value = value.replace('\n', ',').split(',')
+        text = value.strip()
+        if text.startswith('['):
+            try:
+                return _parse_mac_list(json.loads(text))
+            except ValueError:
+                pass
+        value = re.split(r'[\s,;]+', text)
     macs = []
     for item in value or []:
         if isinstance(item, dict):

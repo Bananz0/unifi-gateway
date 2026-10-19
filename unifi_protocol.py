@@ -38,6 +38,15 @@ from tools import (
 )
 
 MASTER_KEY = "ba86f2bbe107c7c57eb5f2690775c712"
+
+# UXG-class models (type uxg in Network 10.6). They share the inform protocol
+# with the USG but are provisioned with UDAPI and report clients differently.
+UXG_MODELS = {'UXG', 'UXGB', 'UXGPRO', 'UXGA6AA'}
+# The controller warns "Skip updating capability ... due to empty
+# udapi_version" without it; this value was accepted in the lab adoption.
+UDAPI_VERSION = {'major': 1, 'minor': 0}
+# Schema not yet known; sent only when a noop asks for it in include_blocks.
+GW_CAPS = {}
 AES_BLOCK_SIZE = 16
 
 
@@ -219,9 +228,6 @@ def _create_complete_inform(config, dc):
             entry['hostname'] = lease['hostname']
         active_leases.append(entry)
 
-    speedtest = dc.data.get('speedtest', {})
-    has_speedtest = speedtest.get('download', 0) > 0
-
     payload = {
         'bootrom_version': 'unknown',
         'cfgversion': config.get('provisioned', 'cfgversion') if config.has_option('provisioned', 'cfgversion') else '',
@@ -260,17 +266,7 @@ def _create_complete_inform(config, dc):
         'uplink': wan_if,
         'uptime': device_uptime,
         'pfor-stats': [],
-        'speedtest-status': {
-            'latency': int(speedtest.get('ping', 0)),
-            'rundate': speedtest.get('lastrun', 0),
-            'runtime': 0,
-            'status_download': 2 if has_speedtest else 0,
-            'status_ping': 2 if speedtest.get('ping', 0) > 0 else 0,
-            'status_summary': 2 if has_speedtest else 0,
-            'status_upload': 2 if has_speedtest else 0,
-            'xput_download': speedtest.get('download', 0),
-            'xput_upload': speedtest.get('upload', 0),
-        },
+        'speedtest-status': _speedtest_status(dc),
         'ddns-status': {'dyndns': dc.data.get('ddns', [])},
         'system-stats': {
             'cpu': system_stats.get('cpu', '0'),
@@ -287,6 +283,180 @@ def _create_complete_inform(config, dc):
         payload['dpi-clients'] = [c['mac'] for c in dc.data['dpi_stats']]
         payload['dpi_stats'] = _modern_dpi_stats(dc.data['dpi_stats'])
 
+    return json.dumps(payload)
+
+
+def _speedtest_status(dc):
+    speedtest = dc.data.get('speedtest', {})
+    has_speedtest = speedtest.get('download', 0) > 0
+    return {
+        'latency': int(speedtest.get('ping', 0)),
+        'rundate': speedtest.get('lastrun', 0),
+        'runtime': 0,
+        'status_download': 2 if has_speedtest else 0,
+        'status_ping': 2 if speedtest.get('ping', 0) > 0 else 0,
+        'status_summary': 2 if has_speedtest else 0,
+        'status_upload': 2 if has_speedtest else 0,
+        'xput_download': speedtest.get('download', 0),
+        'xput_upload': speedtest.get('upload', 0),
+    }
+
+
+def is_uxg(config):
+    return config.get('gateway', 'device', fallback='').upper() in UXG_MODELS
+
+
+def _uxg_network_name(port, primary_lan):
+    """UDAPI interface a LAN port's network is provisioned on: the port's
+    ``network`` key, else br0 (the controller's default LAN bridge)."""
+    if port.get('network'):
+        return port['network']
+    return 'br0' if port['ifname'] == primary_lan else port['ifname']
+
+
+def _hosts_by_port(dc, ports, primary_lan):
+    """Assign host_table entries to LAN ports (same rule as network_table)."""
+    by_realif = {p.get('realif'): p['ifname'] for p in ports
+                 if p['type'].lower().startswith('lan') and p.get('realif')}
+    result = {}
+    for host in dc.data.get('host_table', []):
+        ifname = by_realif.get(host.get('realif')) if host.get('realif') else primary_lan
+        if ifname:
+            result.setdefault(ifname, []).append(host)
+    return result
+
+
+def _uxg_port_table(config, dc, ports, primary_lan):
+    """port_table with per-port mac_table: how a UXG reports its clients."""
+    ifstat = dc.data.get('ifstat', {})
+    macs = dc.data.get('macs', {})
+    hosts = _hosts_by_port(dc, ports, primary_lan)
+    table = []
+    for idx, port in enumerate(ports, 1):
+        ifname = port['ifname']
+        info = ifstat.get(ifname, {})
+        entry = {
+            'port_idx': idx,
+            'name': ifname,
+            'ifname': ifname,
+            'mac': macs.get(ifname) or config.get('gateway', 'lan_mac'),
+            'num_port': 1,
+            'enable': True,
+            'up': ifname in ifstat,
+            'speed': info.get('speed', 1000),
+            'full_duplex': True,
+            'media': 'GE',
+            'rx_bytes': int(info.get('rx_bytes', 0)),
+            'tx_bytes': int(info.get('tx_bytes', 0)),
+            'rx_packets': int(info.get('rx_packets', 0)),
+            'tx_packets': int(info.get('tx_packets', 0)),
+            'rx_errors': int(info.get('rx_errors', 0)),
+            'tx_errors': int(info.get('tx_errors', 0)),
+            'rx_dropped': int(info.get('rx_dropped', 0)),
+            'tx_dropped': int(info.get('tx_dropped', 0)),
+            'mac_table': [],
+        }
+        if port['type'].lower() == 'wan':
+            entry['is_uplink'] = True
+        for host in hosts.get(ifname, []):
+            row = {k: v for k, v in host.items() if k not in ('realif', 'oui')}
+            row.setdefault('age', 0)
+            row['static'] = False
+            row['vlan'] = int(port.get('vlan', 1))
+            entry['mac_table'].append(row)
+        table.append(entry)
+    return table
+
+
+def _uxg_active_leases(dc, ports, primary_lan):
+    networks = {p['ifname']: _uxg_network_name(p, primary_lan) for p in ports
+                if p['type'].lower().startswith('lan')}
+    port_of = {h['mac']: ifname
+               for ifname, hosts in _hosts_by_port(dc, ports, primary_lan).items()
+               for h in hosts}
+    leases = []
+    for lease in dc.data.get('dhcp_leases', []):
+        entry = {'mac': lease['mac'], 'ip': lease['ip'],
+                 'network': networks.get(port_of.get(lease['mac'], primary_lan),
+                                         networks.get(primary_lan, 'br0'))}
+        if lease.get('hostname'):
+            entry['hostname'] = lease['hostname']
+        expiry = str(lease.get('expiry', ''))
+        if expiry.isdigit() and int(expiry) > 0:
+            entry['expiration'] = int(expiry)
+        leases.append(entry)
+    return leases
+
+
+def _create_uxg_inform(config, dc, include_blocks=()):
+    """Complete inform for a UXG-class model (device = UXGB etc.).
+
+    Follows what the Network 10.6 UXG processor reads: clients come from
+    port_table[].mac_table and ipv4_active_leases, DPI from dpi_stats.
+    """
+    ports = ast.literal_eval(config.get('gateway', 'ports'))
+    lan_if = [d['ifname'] for d in ports if d['type'].lower() == 'lan'][0]
+    wan_if = [d['ifname'] for d in ports if d['type'].lower() == 'wan'][0]
+    mac, ip_addr, ip_info = _resolve_lan_identity(config, dc, lan_if)
+
+    hostname = get_hostname()
+    if config.has_option('gateway', 'hostname'):
+        hostname = config.get('gateway', 'hostname')
+    system_stats = dc.data.get('system_stats', {'cpu': '0', 'mem': '0'})
+    device_uptime = dc.data.get('uptime') or uptime()
+
+    network_table = []
+    by_name = {p['ifname']: p for p in ports}
+    for net in get_network_table(dc.data, ports):
+        net = {k: v for k, v in net.items() if k != 'host_table'}
+        port = by_name.get(net['name'], {})
+        if port.get('type', '').lower().startswith('lan'):
+            net['name'] = _uxg_network_name(port, lan_if)
+        network_table.append(net)
+
+    payload = {
+        'board_rev': 1,
+        'cfgversion': config.get('provisioned', 'cfgversion') if config.has_option('provisioned', 'cfgversion') else '',
+        'connect_request_ip': ip_addr,
+        'connect_request_port': '36424',
+        'default': False,
+        'state': 2,
+        'discovery_response': False,
+        'hostname': hostname,
+        'inform_url': config.get('gateway', 'url'),
+        'ip': ip_addr,
+        'isolated': False,
+        'locating': config.getboolean('gateway', 'locating') if config.has_option('gateway', 'locating') else False,
+        'mac': mac,
+        'model': config.get('gateway', 'device'),
+        'model_display': config.get('gateway', 'device_display'),
+        'netmask': ip_info.get('netmask', '255.255.255.0'),
+        'required_version': '4.0.0',
+        'serial': mac.replace(':', ''),
+        'version': config.get('gateway', 'firmware'),
+        'time': int(time.time()),
+        'uptime': device_uptime,
+        'udapi_version': dict(UDAPI_VERSION),
+        'uplink': wan_if,
+        'port_table': _uxg_port_table(config, dc, ports, lan_if),
+        'ipv4_active_leases': _uxg_active_leases(dc, ports, lan_if),
+        'if_table': get_if_table(dc.data, ports),
+        'network_table': network_table,
+        'routes': _build_routes(dc, wan_if, lan_if),
+        'pfor-stats': [],
+        'speedtest-status': _speedtest_status(dc),
+        'ddns-status': {'dyndns': dc.data.get('ddns', [])},
+        'system-stats': {
+            'cpu': system_stats.get('cpu', '0'),
+            'mem': system_stats.get('mem', '0'),
+            'uptime': str(device_uptime),
+        },
+        'has_dpi': 'dpi_stats' in dc.data,
+    }
+    if 'dpi_stats' in dc.data:
+        payload['dpi_stats'] = _modern_dpi_stats(dc.data['dpi_stats'])
+    if 'gw_caps' in (include_blocks or ()):
+        payload['gw_caps'] = dict(GW_CAPS)
     return json.dumps(payload)
 
 
@@ -330,9 +500,13 @@ def _build_routes(dc, wan_if, lan_if):
     return routes
 
 
-def create_inform(config, dc):
+def create_inform(config, dc, include_blocks=()):
+    """``include_blocks`` are the data blocks the controller asked for in its
+    last noop (UXG only)."""
     if not config.getboolean('gateway', 'is_adopted'):
         return _create_partial_inform(config, dc)
+    if is_uxg(config):
+        return _create_uxg_inform(config, dc, include_blocks)
     return _create_complete_inform(config, dc)
 
 
