@@ -347,6 +347,9 @@ class OPNsenseConfigSync:
 
     def apply_system_cfg(self, cfg):
         """Translate and apply a controller system_cfg dict. Returns a summary."""
+        if 'udapi' in cfg or 'ubntconf' in cfg:
+            raise ValueError('UXG UDAPI provisioning is not implemented; '
+                             'refusing to treat it as an empty EdgeOS config')
         self.warnings = []
         summary = {}
         fw = cfg.get('firewall', {})

@@ -4,7 +4,9 @@ import configparser, json, os, sys, time, urllib.request, urllib.error
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import unifi_protocol as up
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.environ.get('PROBE_STATE_DIR', os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '.uxg-probe'))
+os.makedirs(HERE, exist_ok=True)
 STATE = os.path.join(HERE, 'state.json')
 LOG = os.path.join(HERE, 'responses.jsonl')
 URL = os.environ['PROBE_URL']  # e.g. http://<lab-controller>:18080/inform

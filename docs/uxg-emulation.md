@@ -9,9 +9,9 @@ learned while investigating a move to emulating a UniFi Gateway Max
 
 - UniFi Network 10.6 still adopts and provisions a UGW3. Blocking, port
   forwards, firewall rules, clients and stats all work.
-- It **ignores USG DPI data**. The `dpi-stats` and `dpi-stats-table` inform
-  fields are read but never stored (verified by decompiling the controller,
-  `com.ubnt.service.devmgr.yvMqs`).
+- The legacy `stat/stadpi` and `stat/sitedpi` endpoints return hard-coded
+  empty results in 10.6. Earlier tests incorrectly used those endpoints to
+  conclude that DPI was unsupported. They cannot validate ingestion.
 - The USG is end-of-life. UXG-class gateways (UXG-Lite, Pro, Max, Fiber,
   Enterprise) are the current devices an external controller (Cloud Key,
   self-hosted) adopts. UCG/UDM consoles **cannot** be adopted by another
@@ -56,33 +56,58 @@ live test adoption in a lab controller:
   reads `port_table[].mac_table`, `ipv4_active_leases`, `network_table`,
   `if_table`, `udapi_version`, `uplink`, `speedtest-status`, `ddns-status`,
   `routes`, `vpn`, `pfor-stats`, `upnp-stats` and others.
-- **DPI:** `mcad` sends `dpi_stats` (underscore) and `fingerprints` in the
+- **DPI, now verified in the lab:** `mcad` sends `dpi_stats` (underscore) and `fingerprints` in the
   inform. The controller handles `dpi_stats` in
   `com.ubnt.net.i.e.HZHXJRnEDktLxXGDhr` /
   `com.ubnt.service.devmgr.d.BXbf` (entries
-  `{mac|ip, initialized, stats: [{app, cat, rx_bytes, tx_bytes, rx_packets,
-  tx_packets, countries?}]}`), gated only by the site DPI setting. The
-  first lab test (clients sent USG-style) produced no stats because the client
-  wasn't known. `tools/uxg_probe_dpi_test.py` resends with
-  `port_table.mac_table` + `ipv4_active_leases`. **That run has not been
-  done yet.**
-- **Flows (Insights) are not reachable on a Cloud Key.** The device's
+  `{mac|ip, initialized, stats: [{app, cat, rxBytes, txBytes, countries?}]}`),
+  gated by the site DPI setting. Snake-case byte counters silently produce
+  zero deltas. **A second lab site confirmed that UGW3 also ingests these
+  modern counters:** migration to UXG is not required for this ingestion path.
+  Both experiments' saved synthetic reports are in
+  [network-10.6-lab-dpi.json](evidence/network-10.6-lab-dpi.json).
+  The camel-case correction was deployed to the existing production UGW3
+  emulator. At 23:25 EAT, its controller's saved five-minute user reports
+  contained non-zero DPI for 8 real clients, totaling 582560 bytes in the
+  first partial reporting window. No production model change was needed.
+  The UXG lab now discovers the client using
+  `port_table[].mac_table` + `ipv4_active_leases`; each port also needs its
+  MAC, num_port, and interface name. The corrected test produced a saved
+  five-minute user report with YouTube (112_4) rx=4000000, tx=200000 and
+  DNS (61_9) rx=8000, tx=4000. Fetch with POST
+  `/api/s/default/stat/report/5minutes.user`, attrs including `time`, `user`,
+  and `dpi`, and start/end as Unix milliseconds. These are synthetic lab
+  counters, not real client traffic. UI rendering has not yet been verified.
+- **Flows remain unverified on a Cloud Key.** The device's
   `unifi-mq-broker` pushes flows to a RabbitMQ the controller provides
   (`messageBroker.rabbitMq` host/port/user/password/TLS); the controller
   consumes queue `unifi_flow_queue`. Cloud Key Gen2+ has no RabbitMQ
-  installed, so Flows can't work there for any gateway.
+  installed in the observed configuration. That observation alone does not
+  prove that every UXG/Cloud Key configuration lacks flow support; earlier
+  statements claiming impossibility were too strong. Check provisioning and
+  feature negotiation before drawing that conclusion.
+  The configuration factory additionally checks the Java property
+  `unifi.rmq.enabled` and the device's `udapiSupportsMessageBroker()` result;
+  external broker provisioning expects a device certificate chain. The
+  environment service defaults its broker TLS port to 5671 (`rmq.tls_port`).
+  This is a lead for further isolated testing, not a verified flow integration.
 
 ## Next steps
 
-1. Run `tools/uxg_probe_dpi_test.py` against a lab controller and confirm
-   whether `stat/stadpi` / `stat/sitedpi` populate. If not, find which
-   condition in `com.ubnt.service.devmgr.d.BXbf` rejects the entries.
+1. Verify the visible application-usage UI against the populated five-minute
+   user reports. Do not use the retired stadpi/sitedpi endpoints as evidence.
+   The real UGW3 emulator received the camel-case conversion on 2026-10-19;
+   real report ingestion is confirmed. Visual lab inspection was blocked by
+   its self-signed TLS certificate.
 2. Map the full UDAPI `system_cfg` schema (the probe logs every response to
    `responses.jsonl`) and write a UDAPI → OPNsense translator.
 3. Add a UXG payload builder next to `_create_complete_inform`, selected by
    `device = UXGB` in config.
 4. Migrate production: forget the USG, adopt the UXG identity (needs the
    controller to accept a model change, or a re-adopt with a new MAC).
+   Do this only after UDAPI provisioning parity has been tested. The current
+   EdgeOS synchronizer explicitly rejects UDAPI so it cannot delete managed
+   rules by treating an unfamiliar format as an empty configuration.
 
 ## Lab setup used
 
@@ -97,3 +122,7 @@ PROBE_URL=http://<lab-controller>:18080/inform python tools/uxg_probe.py 2
 PROBE_URL=... python tools/uxg_probe.py 4
 PROBE_URL=... python tools/uxg_probe_dpi_test.py
 ```
+
+State and raw response logs default to ignored `tools/.uxg-probe/`. Override
+with `PROBE_STATE_DIR` to resume a previously adopted probe. Logs can contain
+device authentication keys and provisioning secrets; never commit them.

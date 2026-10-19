@@ -1,0 +1,65 @@
+{
+  "controller_version": "10.6.106",
+  "synthetic_traffic": true,
+  "source_endpoint": "/api/s/{site}/stat/report/5minutes.user",
+  "experiments": [
+    {
+      "reported_model": "UXGB",
+      "observed_reports": [
+        {
+          "time": 1792440900000,
+          "user": "aa:bb:cc:00:00:01",
+          "dpi": {
+            "112_4-rx_bytes": 4000000,
+            "112_4-tx_bytes": 200000,
+            "112_4-activity_seconds": 40,
+            "61_9-rx_bytes": 8000,
+            "61_9-tx_bytes": 4000,
+            "61_9-activity_seconds": 40,
+            "rx_bytes": 4008000,
+            "tx_bytes": 204000,
+            "unidentified-rx_bytes": 0,
+            "unidentified-tx_bytes": 0,
+            "bytes": 4212000
+          }
+        },
+        {
+          "time": 1792441200000,
+          "user": "aa:bb:cc:00:00:01",
+          "dpi": {
+            "112_4-rx_bytes": 14000000,
+            "112_4-tx_bytes": 700000,
+            "112_4-activity_seconds": 140,
+            "61_9-rx_bytes": 28000,
+            "61_9-tx_bytes": 14000,
+            "61_9-activity_seconds": 140,
+            "rx_bytes": 14028000,
+            "tx_bytes": 714000,
+            "unidentified-rx_bytes": 0,
+            "unidentified-tx_bytes": 0,
+            "bytes": 14742000
+          }
+        }
+      ]
+    },
+    {
+      "reported_model": "UGW3",
+      "observed_reports": [
+        {
+          "time": 1792441200000,
+          "user": "aa:bb:cc:00:00:02",
+          "dpi": {
+            "112_4-rx_bytes": 6000000,
+            "112_4-tx_bytes": 300000,
+            "112_4-activity_seconds": 60,
+            "rx_bytes": 6000000,
+            "tx_bytes": 300000,
+            "unidentified-rx_bytes": 0,
+            "unidentified-tx_bytes": 0,
+            "bytes": 6300000
+          }
+        }
+      ]
+    }
+  ]
+}

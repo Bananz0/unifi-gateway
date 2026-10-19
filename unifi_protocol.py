@@ -285,11 +285,30 @@ def _create_complete_inform(config, dc):
     if 'dpi_stats' in dc.data:
         payload['dpi-stats'] = dc.data['dpi_stats']
         payload['dpi-clients'] = [c['mac'] for c in dc.data['dpi_stats']]
-        # Newer controllers read client DPI from 'dpi_stats' in any device's
-        # inform; the hyphenated USG field is only kept for older ones.
-        payload['dpi_stats'] = dc.data['dpi_stats']
+        payload['dpi_stats'] = _modern_dpi_stats(dc.data['dpi_stats'])
 
     return json.dumps(payload)
+
+
+def _modern_dpi_stats(clients):
+    """Translate legacy counters to the UXG inform schema.
+
+    Network 10.6's client DPI processor reads rxBytes/txBytes. Sending the
+    legacy snake_case fields under dpi_stats silently produces zero deltas.
+    Keep the collector's legacy data intact for dpi-stats and older servers.
+    """
+    names = {'rx_bytes': 'rxBytes', 'tx_bytes': 'txBytes',
+             'rx_packets': 'rxPackets', 'tx_packets': 'txPackets'}
+
+    def counters(row):
+        result = {names.get(key, key): value for key, value in row.items()
+                  if key != 'countries'}
+        if 'countries' in row:
+            result['countries'] = [counters(country) for country in row['countries']]
+        return result
+
+    return [{**client, 'stats': [counters(row) for row in client.get('stats', [])]}
+            for client in clients]
 
 
 def _build_routes(dc, wan_if, lan_if):

@@ -12,6 +12,16 @@ from collectors.opnsense_sync import (
 )
 
 
+@pytest.mark.parametrize('cfg', [{'udapi': {}}, {'ubntconf': 'unifi.version=10.6'}])
+def test_udapi_is_rejected_before_any_existing_objects_can_be_changed(cfg):
+    from unittest.mock import Mock
+    api = Mock()
+    sync = OPNsenseConfigSync(api, lambda name: 'lan', lambda: ['lan'])
+    with pytest.raises(ValueError, match='UXG UDAPI provisioning'):
+        sync.apply_system_cfg(cfg)
+    assert api.mock_calls == []
+
+
 class FakeAPI:
     """In-memory stand-in for the MVC endpoints the sync module uses."""
 
