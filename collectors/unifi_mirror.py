@@ -360,6 +360,10 @@ class OPNsenseMirror:
         wan_descr = {overview.get(i) for i in wan}
         lan_descr = {overview.get(i) for i in lan if overview.get(i)}
         desired, index = {}, {}
+        # indexes held by the operator's own UniFi rules; ours go around them
+        taken = {(r.get('ruleset'), r.get('rule_index'))
+                 for r in self.ctl.call('GET', 'rest/firewallrule')
+                 if not is_mirrored(r.get('name'))}
         rows = sorted(self.api.search('firewall/filter/search_rule'),
                       key=lambda r: str(r.get('sort_order') or ''))
         for rule in rows:
@@ -394,6 +398,8 @@ class OPNsenseMirror:
                 self._warn('firewall rule %r not mirrored: %s' % (descr, e))
                 continue
             index[ruleset] = index.get(ruleset, self._rule_base() - 1) + 1
+            while (ruleset, index[ruleset]) in taken:
+                index[ruleset] += 1
             name = _name(descr)
             while name in desired:
                 name = (name + '*')[:128]

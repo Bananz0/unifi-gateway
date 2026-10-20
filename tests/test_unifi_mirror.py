@@ -218,3 +218,13 @@ def test_rule_numbers_follow_gateway_type(mirror):
     mirror.run()
     indexes = sorted(r['rule_index'] for r in mirror.ctl.store['firewallrule'])
     assert indexes[0] == 20000 and all(i >= 20000 for i in indexes)
+
+
+def test_rule_numbers_skip_operator_rules(mirror):
+    """Indexes held by rules made in UniFi are left alone (api.err.FirewallRuleIndexExisted)."""
+    mirror.ctl.store['firewallrule'].append(
+        {'_id': 'own', 'name': 'my own rule', 'ruleset': 'LAN_IN', 'rule_index': 2000})
+    mirror.run()
+    rules = [r for r in mirror.ctl.store['firewallrule'] if r['_id'] != 'own']
+    lan_in = sorted(r['rule_index'] for r in rules if r['ruleset'] == 'LAN_IN')
+    assert lan_in and 2000 not in lan_in and lan_in[0] == 2001
