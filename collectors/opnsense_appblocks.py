@@ -29,7 +29,7 @@ def _security_baseline(detail):
     return result
 
 
-def plan_blocks(rules, networks, applications, resolve=resolve_app_ids):
+def plan_blocks(rules, networks, applications, resolve=resolve_app_ids, allow_mixed=False):
     """Compile captured Network 10.6 simple-app-block fields into exact scopes.
     ``resolve`` maps UniFi app IDs onto the enforcing backend's catalog."""
     if not isinstance(rules, list):
@@ -82,7 +82,7 @@ def plan_blocks(rules, networks, applications, resolve=resolve_app_ids):
         for scope in scopes:
             grouped.setdefault(scope, set()).update(apps)
     kinds = {scope[0] for scope in grouped}
-    if len(kinds) > 1:
+    if len(kinds) > 1 and not allow_mixed:
         raise ValueError('mixed client/network app blocks require policy-overlap resolution')
     subnets = [ipaddress.ip_network(s[1]) for s in grouped if s[0] == 'network']
     for index, subnet in enumerate(subnets):

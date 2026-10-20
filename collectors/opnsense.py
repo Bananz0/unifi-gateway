@@ -42,7 +42,7 @@ from .opnsense_quality import WanQuality
 from .client_traffic import ClientTraffic
 from .unifi_mirror import OPNsenseMirror, UniFiController
 from .opnsense_appblocks import SimpleAppBlockSync
-from .adguard_appblocks import AdGuardAppBlockSync, AdGuardHome
+from .adguard_appblocks import AdGuardAppBlockSync, AdGuardHome, neighbor_addresses
 from .ntopng import NtopngDPI
 
 logger = logging.getLogger('unifi-gateway')
@@ -264,7 +264,8 @@ class OPNSenseCollector(FreeBSDCollector):
                             if config.has_option(ADGUARD_SECTION, k)})
             if agh['username'] and agh['password']:
                 self.appcontrol = AdGuardAppBlockSync(
-                    AdGuardHome(agh['url'], agh['username'], agh['password']), controller())
+                    AdGuardHome(agh['url'], agh['username'], agh['password']), controller(),
+                    self._app_client_addresses)
                 logger.info('Enforcing UniFi app blocks with AdGuard Home at %s', agh['url'])
             else:
                 logger.warning('UniFi app blocks: set [adguard] username/password for AdGuard Home')
@@ -412,6 +413,13 @@ class OPNSenseCollector(FreeBSDCollector):
         opts.update({k: config.get(NTOPNG_SECTION, k) for k in NTOPNG_DEFAULTS
                      if config.has_option(NTOPNG_SECTION, k)})
         return opts if opts['username'] and opts['password'] else None
+
+    def _app_client_addresses(self):
+        # Enforcement must not reuse historical hostwatch records or stale
+        # leases after an address moves to a different MAC.
+        return neighbor_addresses(self.api.search('diagnostics/interface/search_arp'),
+                                  self.api.search('diagnostics/interface/search_ndp'),
+                                  self._lan_devices())
 
     def _mac_for_ip(self, ip):
         """MAC of a LAN device by IPv4/IPv6 address, from the ARP table and

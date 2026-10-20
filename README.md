@@ -206,7 +206,13 @@ api_secret = ...
 
 **Mirroring OPNsense into UniFi:** add a `[unifi]` section (`url`, `username`, `password`, optional `site`, `mirror_interval`) with a local controller admin account. Every `mirror_interval` seconds (default 300), the daemon copies OPNsense's own WAN port forwards, aliases (as firewall groups), LAN/WAN firewall rules, DHCP reservations (as client fixed IPs) and static routes into the controller. Mirrored objects are named `[OPNsense] …` (clients get it in their note). OPNsense stays the source: they're refreshed from it and removed when the original goes away. When the controller pushes them back, the gateway skips them, so nothing is duplicated. Anything UniFi can't express (e.g. several ports forwarded to one, LAN-side redirects, rules on other interfaces) is skipped with a log warning.
 
-**DPI / Insights:** if Zenarmor is installed, per-client application stats are read from its reporting database (`dpi = auto`, `zenarmor_db` in `[opnsense]`). Reports include the legacy USG fields and the modern `dpi_stats` format with camel-case counters, and they are confirmed in the saved client reports on Network 10.6 for both UXG-Max and USG emulation.
+**DPI / Insights:** ntopng/nDPI can supply live per-client application counters
+with `dpi = ntopng` in `[opnsense]` and a configured `[ntopng]` account. Its
+default polling interval is 30 seconds, separately from interface collection.
+`dpi = auto` prefers a configured, available ntopng source and otherwise uses
+the Zenarmor reporting database (`zenarmor_db`). Reports use the modern
+`dpi_stats` format with camel-case counters. See the configuration example and
+limitations in [traffic rules and reporting](docs/traffic-rules.md).
 
 **Application blocking:** with a local controller account in `[unifi]`, a separate
 worker reads `v2/firewall-app-blocks` every 30 seconds (`app_control = true`,
@@ -218,6 +224,21 @@ controller rule removes its managed policies. Set `app_control = false` to stop
 reconciliation; remove rules first if existing blocks should also be removed.
 This worker is independent of `mirror = false` and does not run inside informs.
 
+The free DNS-based backend is selected with
+`app_control_backend = adguard` in `[unifi]` and an `[adguard]` account. Device
+MACs resolve to current LAN ARP/NDP addresses, including observed IPv6 privacy
+addresses, because Dnsmasq provides DHCP. Old IP selectors retire when ownership
+changes; unknown/offline devices remain pending. Device and containing-network
+blocks are combined, and overlapping manual AdGuard clients reject the plan.
+Only DNS requests through AdGuard are covered; cached answers, existing
+connections, external DoH/VPNs and hard-coded addresses can bypass this backend.
+
+**Network 11 and the iPhone Traffic Rules screen:** the deprecated
+`trafficrules` create API rejects requests unconditionally in Network 11.0.94.
+Use current Simple App Blocking in the web UI or the supported-API helper in
+[traffic rules](docs/traffic-rules.md). An iPhone action using the removed API
+cannot be repaired by changing the emulator's advertised capabilities.
+
 Scoped policy activation requires an appropriate Zenarmor license. The installed
 free backend rejects activation with `Upgrade to premium`; the bridge reports
 this and leaves the policy disabled. It never applies a device-only rule to the
@@ -226,7 +247,15 @@ device/network scopes, overlapping subnets, dynamic IPv6 scope and existing
 custom-policy inheritance remain unsupported and produce explicit errors.
 Configuration readback alone does not prove that client packets were blocked.
 
-**Traffic Flows (UXG mode):** with `device = UXGB` and `flows = true` in `[opnsense]`, every finished, allowed Zenarmor connection is sent in the inform's `connections` list. The controller stores it as a Traffic Flow (client, domain, port, networks, country, bytes). This was verified on a Cloud Key running Network 10.6 without RabbitMQ. Blocked connections are not sent, because this path records every entry as allowed. See [UXG findings](docs/uxg-emulation.md).
+**Android TV diagnostics:** the standalone [ADB exposure scanner](docs/tv-scan.md)
+checks TCP/5555 negotiation, with an optional read-only shell test. It reports
+observed access rather than diagnosing malware from a model name or missing echo.
+
+**Traffic Flows (UXG mode):** with `device = UXGB` and `flows = true` in
+`[opnsense]`, finished allowed connections from the selected ntopng or Zenarmor
+source are sent in the inform's `connections` list. The controller stores client,
+domain, port, network, country and byte information. Blocked events use the
+separate firewall-log trigger path. See [UXG findings](docs/uxg-emulation.md).
 
 Zenarmor reports include per-application country byte totals where geography is
 known. Inbound connections use the destination client's MAC and reverse the
