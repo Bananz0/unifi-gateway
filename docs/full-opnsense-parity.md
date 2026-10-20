@@ -117,6 +117,17 @@ No actual user-device Instagram block was applied. Additional policy activation
 is subject to the installed license checks; the bridge must not bypass them or
 widen a device-only block into the global Default policy.
 
+The worker was deployed at 19:17 EAT with a source/config rollback backup at
+`/root/unifi-app-worker-backup-20261020-161741`. The running daemon logged an
+initial zero-rule reconciliation, no managed app policies remained, and the
+controller continued receiving adopted UXGB informs. This verifies the live
+polling path with an empty rule set, not controller-to-client enforcement.
+The combined branch passed 357 tests after merging Claude's Network 11 zone
+policy and firewall-trigger attribution fixes. Those production changes were
+preserved during deployment; legacy firewall-rule mirroring is skipped for a
+zone-based site and its existing mirrored policies provide trigger identities.
+Creating/updating all zone-based firewall policy types is still a parity gap.
+
 ## Throughput and quality verification, 2026-10-20
 
 The internal collector's `rx_bps`/`tx_bps` names mean bytes/second. UXG wire
