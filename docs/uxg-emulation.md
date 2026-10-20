@@ -128,10 +128,12 @@ live test adoption in a lab controller:
   (`POST /v2/api/site/{site}/content-filtering/create`, categories
   `[ADVERTISEMENT]`, schedule `{mode: ALWAYS}`). It does not appear in
   `system_cfg`: the controller only adds a LAN_IN "allow DNS UTM filter" rule,
-  and a real UXG filters through Ubiquiti's cloud DNS using the UTM token. An
-  OPNsense equivalent would read the profiles from the controller and drive
-  whichever DNS server clients use (AdGuard Home or Unbound DNSBL); not
-  implemented.
+  and a real UXG filters through Ubiquiti's cloud DNS using the UTM token. Here
+  AdGuard Home on OPNsense filters DNS for every client, so the mirror shows it
+  as `[OPNsense] Ad Blocking (AdGuard Home)` (all LAN/guest networks) while
+  AdGuard's protection and filtering are on, and removes it when they are off.
+  It reads AdGuardHome.yaml and never writes to AdGuard. Live in production
+  since 2026-10-20 08:06.
 
 - **Speed tests** run off the inform loop. Inline, they stalled informs for
   about 30s and the controller marked wireless clients disconnected.
