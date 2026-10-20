@@ -70,6 +70,24 @@ def inform(config=None, dc=None, **kw):
         return json.loads(create_inform(config or make_config(), dc or DC(), **kw))
 
 
+def test_secondary_wan_without_ip_still_reports_real_port_and_down_state():
+    import ast
+    config = make_config()
+    ports = ast.literal_eval(config.get('gateway', 'ports'))
+    ports.append({'ifname': 'eth3', 'realif': 're1', 'type': 'wan2',
+                  'name': 'WAN2', 'port_idx': 4})
+    config.set('gateway', 'ports', json.dumps(ports))
+    dc = DC()
+    dc.data['ifstat']['eth3'] = {**stats(0), 'up': False, 'enable': False}
+    dc.data['macs']['eth3'] = '00:11:22:33:44:55'
+    port = next(p for p in inform(config, dc)['port_table'] if p['port_idx'] == 4)
+    assert port['name'] == 'eth3'
+    assert port['is_uplink'] is True
+    assert port['up'] is False
+    assert port['enable'] is False
+    assert port['mac'] == '00:11:22:33:44:55'
+
+
 class TestSelection:
 
     @pytest.mark.parametrize('device,expected', [

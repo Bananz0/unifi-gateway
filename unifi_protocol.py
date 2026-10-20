@@ -366,8 +366,8 @@ def _uxg_port_table(config, dc, ports, primary_lan):
             'ifname': ifname,
             'mac': macs.get(ifname) or config.get('gateway', 'lan_mac'),
             'num_port': 1,
-            'enable': True,
-            'up': ifname in ifstat,
+            'enable': bool(info.get('enable', True)),
+            'up': bool(info.get('up', ifname in ifstat)),
             'speed': info.get('speed', 1000),
             'full_duplex': True,
             'media': 'GE',
@@ -388,7 +388,7 @@ def _uxg_port_table(config, dc, ports, primary_lan):
             'tx_rate': int(info.get('tx_bps', 0)),
             'mac_table': [],
         }
-        if port['type'].lower() == 'wan':
+        if port['type'].lower().startswith('wan'):
             entry['is_uplink'] = True
         for host in hosts.get(ifname, []):
             row = {k: v for k, v in host.items() if k not in ('realif', 'oui')}

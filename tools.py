@@ -67,7 +67,7 @@ def get_if_table(data, ports):
             continue
         if_entry = {
             'drops': int(info['rx_dropped']) + int(info['tx_dropped']),
-            'enable': True,
+            'enable': bool(info.get('enable', True)),
             'full_duplex': True,
             'ip': data['ip'][iface]['address'],
             'mac': data['macs'][iface],
@@ -86,7 +86,7 @@ def get_if_table(data, ports):
             'tx_dropped': info['tx_dropped'],
             'tx_errors': info['tx_errors'],
             'tx_packets': info['tx_packets'],
-            'up': True,
+            'up': bool(info.get('up', True)),
             'uptime': uptime(),
         }
         if iface == wan_if:
@@ -121,13 +121,13 @@ def get_network_table(data, ports):
             ],
             'autoneg': 'true',
             'duplex': 'full',
-            'l1up': 'true',
+            'l1up': 'true' if data.get('ifstat', {}).get(iface, {}).get('up', True) else 'false',
             'mac': data['macs'][iface],
             'mtu': '1500',
             'name': iface,
             'speed': '1000',
             'stats': get_net_stats(data, iface),
-            'up': 'true',
+            'up': 'true' if data.get('ifstat', {}).get(iface, {}).get('up', True) else 'false',
         }
         if iface in lan_ports:
             net_entry['host_table'] = [

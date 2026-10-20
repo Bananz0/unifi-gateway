@@ -423,8 +423,8 @@ class BaseCollector:
             return {
                 'lastrun': int(ts),
                 'ping': sp.get('ping', 0),
-                'upload': sp.get('upload', 0) / 1024 / 1024,
-                'download': sp.get('download', 0) / 1024 / 1024,
+                'upload': sp.get('upload', 0) / 1000000,
+                'download': sp.get('download', 0) / 1000000,
             }
         except (IOError, OSError, json.JSONDecodeError, KeyError, TypeError):
             return noresult

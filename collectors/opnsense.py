@@ -17,6 +17,7 @@ is unreachable, so a misconfigured key degrades to the old behaviour instead
 of breaking informs.
 """
 import calendar
+import ast
 import hashlib
 import json
 import logging
@@ -35,6 +36,7 @@ from .opnsense_udapi import UDAPIConfigSync, is_udapi_config, trigger_tags
 from .zenarmor import ZenarmorDPI
 from .opnsense_fwlog import FirewallLogTriggers
 from .netflow import NetflowTotals
+from .opnsense_ports import discover_ports
 from .unifi_mirror import OPNsenseMirror, UniFiController
 
 logger = logging.getLogger('unifi-gateway')
@@ -63,6 +65,7 @@ DEFAULTS = {
     'flows': 'false',
     'zenarmor_db': '/usr/local/datastore/sqlite/conn_all.sqlite',
     'netflow_db': '/var/netflow/src_addr_000300.sqlite',
+    'auto_ports': 'true',
 }
 
 LOCAL_HOSTS = ('127.0.0.1', 'localhost', '::1')
@@ -144,6 +147,15 @@ class OPNSenseCollector(FreeBSDCollector):
             self.udapi_sync = UDAPIConfigSync(
                 self.api, self.port_identifier, self.lan_identifiers,
                 options=options)
+        if self.api and self._bool('auto_ports'):
+            existing = ast.literal_eval(config.get('gateway', 'ports'))
+            ports, warnings = discover_ports(existing, list(self._overview().values()),
+                config.get('gateway', 'device', fallback='UGW3'))
+            for warning in warnings:
+                logger.warning('Port discovery: %s', warning)
+            if ports != existing:
+                config.set('gateway', 'ports', json.dumps(ports))
+                logger.info('Discovered %d additional Ethernet ports', len(ports) - len(existing))
         super().__init__(config)
 
     # ── Options / state ──────────────────────────────────────────────────
@@ -381,6 +393,9 @@ class OPNSenseCollector(FreeBSDCollector):
             num = lambda k: int(stats.get(k, 0) or 0)
             rx, tx = num('bytes received'), num('bytes transmitted')
             info = {
+                'enable': self._overview().get(port['realif'], {}).get('enabled', True),
+                'up': (self._overview().get(port['realif'], {}).get('status')
+                       in ('up', 'active', 'associated')),
                 'rx_bytes': str(rx),
                 'rx_packets': str(num('packets received')),
                 'rx_errors': str(num('input errors')),
@@ -530,21 +545,23 @@ class OPNSenseCollector(FreeBSDCollector):
         return _parse_uptime((info or {}).get('uptime'))
 
     def _get_speedtest_results(self):
+        fallback = super()._get_speedtest_results()
         recent = self._call(
             'speedtest', lambda: self.api.get('speedtest/service/showrecent'), ttl=300)
         if isinstance(recent, dict) and recent.get('date'):
             try:
                 lastrun = int(time.mktime(
                     datetime.strptime(recent['date'][:19], '%Y-%m-%dT%H:%M:%S').timetuple()))
-                return {
+                result = {
                     'lastrun': lastrun,
                     'ping': float(recent.get('latency', 0)),
                     'download': float(recent.get('download', 0)),
                     'upload': float(recent.get('upload', 0)),
                 }
+                return result if lastrun >= fallback.get('lastrun', 0) else fallback
             except (ValueError, TypeError):
                 pass
-        return super()._get_speedtest_results()
+        return fallback
 
     def _get_ddns(self):
         rows = self._call(

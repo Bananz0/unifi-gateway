@@ -274,7 +274,7 @@ class TestSpeedtest:
             gateway_config.set('gateway', 'speedtest_file', 'speedtest.json')
             dc = BaseCollector(gateway_config)
         assert dc.data['speedtest']['ping'] == 5.0
-        assert dc.data['speedtest']['download'] == 200.0  # 209715200 / 1024 / 1024
+        assert dc.data['speedtest']['download'] == 209.7152  # decimal Mbps
 
 
 class TestNameservers:

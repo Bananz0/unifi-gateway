@@ -30,6 +30,7 @@ import re
 
 from .opnsense_api import OPNsenseAPIError
 from .opnsense_ids import apply_ids
+from .opnsense_coverage import untranslated_paths
 from .opnsense_sync import (
     ALIAS_PREFIX, ALIASES, BLOCK_RULE_KEY, BLOCKED_IP_ALIAS, BLOCKED_MAC_ALIAS, DNAT_RULES,
     FILTER_RULES, OPNsenseConfigSync, _as_list, alias_name, is_mirrored,
@@ -276,6 +277,7 @@ class UDAPIConfigSync(OPNsenseConfigSync):
                 self._warn('threat management not applied: %s', e)
 
         summary['warnings'] = list(self.warnings)
+        summary['untranslated_settings'] = untranslated_paths(udapi)
         return summary
 
     def _referenced_aliases(self):

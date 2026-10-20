@@ -152,6 +152,12 @@ class TestParsing:
         assert _parse_iso('') is None
 
 
+def test_new_speedtest_result_is_not_hidden_by_old_plugin_history(collector):
+    fallback = {'lastrun': int(time.time()), 'download': 100, 'upload': 20, 'ping': 5}
+    with patch('collectors.base.BaseCollector._get_speedtest_results', return_value=fallback):
+        assert collector._get_speedtest_results() == fallback
+
+
 def test_failed_arp_read_cannot_keep_old_clients_fresh(collector):
     collector._cache['arp'] = (time.time() - 90, ['stale'])
     def fail():
