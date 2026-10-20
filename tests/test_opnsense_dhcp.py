@@ -14,6 +14,18 @@ SERVER = {'name': 'guest', 'enabled': True, 'interfaces': [{'id': 'br1'}],
 
 
 class DHCPAPI(FakeAPI):
+    def __init__(self):
+        super().__init__()
+        self.gets['dnsmasq/settings/get'] = {'dnsmasq': {
+            'enable': '1', 'interface': '', 'port': '53053', 'dhcp': {'no_interface': ''}}}
+
+    def post(self, path, payload=None, **kwargs):
+        if path == 'dnsmasq/settings/set':
+            self.posts.append(path)
+            self.gets['dnsmasq/settings/get']['dnsmasq'].update(payload['dnsmasq'])
+            return {'result': 'saved'}
+        return super().post(path, payload, **kwargs)
+
     def _spec_for(self, path):
         for spec in (RANGES, OPTIONS):
             if path == spec.add or path.startswith((spec.set, spec.delete)):
@@ -113,5 +125,30 @@ def test_local_pool_refuses_existing_relay():
     sync.api = api = RelayAPI()
     api.store[RELAYS.search] = {'existing': {'interface': 'opt5', 'destination': 'd'}}
     with pytest.raises(ValueError, match='existing relay'):
+        sync_servers(sync, [SERVER])
+    assert api.posts == []
+
+
+def test_managed_vlan_is_added_to_explicit_listeners_without_changing_dns_port():
+    api, sync = setup()
+    api.gets['dnsmasq/settings/get']['dnsmasq']['interface'] = 'lan'
+    api.gets['interfaces/assignment/get_item/opt5'] = {'interface': {'descr': 'ufg_vlan_example'}}
+    sync_servers(sync, [SERVER])
+    assert api.gets['dnsmasq/settings/get']['dnsmasq']['interface'] == 'lan,opt5'
+    assert api.gets['dnsmasq/settings/get']['dnsmasq']['port'] == '53053'
+    api.posts.clear()
+    sync_servers(sync, [SERVER])
+    assert api.posts == []
+
+
+def test_unmanaged_listener_scope_or_explicit_dhcp_exclusion_is_not_overridden():
+    api, sync = setup()
+    api.gets['dnsmasq/settings/get']['dnsmasq']['interface'] = 'lan'
+    with pytest.raises(ValueError, match='managed VLAN'):
+        sync_servers(sync, [SERVER])
+    assert api.posts == []
+    api.gets['dnsmasq/settings/get']['dnsmasq']['interface'] = ''
+    api.gets['dnsmasq/settings/get']['dnsmasq']['dhcp']['no_interface'] = 'opt5'
+    with pytest.raises(ValueError, match='explicitly disabled'):
         sync_servers(sync, [SERVER])
     assert api.posts == []

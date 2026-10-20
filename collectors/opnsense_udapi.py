@@ -33,6 +33,7 @@ from .opnsense_ids import apply_ids
 from .opnsense_coverage import untranslated_paths
 from .opnsense_dhcp import plan_servers, sync_servers
 from .opnsense_relay import plan_relays, sync_relays
+from .opnsense_interfaces import VLANProvisioner
 from .opnsense_sync import (
     ALIAS_PREFIX, ALIASES, BLOCK_RULE_KEY, BLOCKED_IP_ALIAS, BLOCKED_MAC_ALIAS, DNAT_RULES,
     FILTER_RULES, OPNsenseConfigSync, _as_list, alias_name, is_mirrored,
@@ -208,7 +209,13 @@ class UDAPIConfigSync(OPNsenseConfigSync):
             i.get('identification', {}).get('id'): i
             for i in udapi.get('interfaces') or [] if isinstance(i, dict)}
         self._if_networks = None
+        self._vlan_bindings = {}
         summary = {}
+        interface_sync = None
+        if self._enabled('apply_interfaces') and 'interfaces' in udapi:
+            interface_sync = VLANProvisioner(self.api, self.port_map, self.lan_identifiers)
+            self._vlan_bindings, summary['vlans'] = interface_sync.prepare(udapi['interfaces'])
+            self._if_networks = None
         sets = self._collect_sets(udapi.get('firewall/sets'))
 
         do_filter = self._enabled('apply_firewall') and 'firewall/filter' in udapi
@@ -271,7 +278,9 @@ class UDAPIConfigSync(OPNsenseConfigSync):
                             raise ValueError('DHCP server and relay cannot share an interface')
                         summary['dhcp_relays'] = sync_relays(self, servers)
                         summary['dhcp_pools'] = sync_servers(self, servers)
-                except (OPNsenseAPIError, ValueError, KeyError, TypeError) as e:
+                except OPNsenseAPIError:
+                    raise  # retry transient service failures without caching success
+                except (ValueError, KeyError, TypeError) as e:
                     self._warn('DHCP pools not applied: %s', e)
         legacy = self._legacy_cfg(udapi)
         for option, name, present, fn in (
@@ -294,6 +303,8 @@ class UDAPIConfigSync(OPNsenseConfigSync):
             except OPNsenseAPIError as e:
                 self._warn('threat management not applied: %s', e)
 
+        if interface_sync is not None:
+            summary['retired_vlans'] = interface_sync.retire()
         summary['warnings'] = list(self.warnings)
         summary['untranslated_settings'] = untranslated_paths(udapi)
         return summary
@@ -320,10 +331,15 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         parent the interface is built on (bridge, VLAN, PPPoE)."""
         if not if_id or _depth > 4:
             return None
+        binding = getattr(self, '_vlan_bindings', {}).get(if_id)
+        if binding:
+            return binding
         direct = self.port_map(if_id)
         if direct:
             return direct
         body = self._udapi_ifs.get(if_id) or {}
+        kind = (body.get('identification') or {}).get('type')
+        candidates = set()
         for addr in body.get('addresses') or []:
             try:
                 iface = ipaddress.ip_interface(addr.get('cidr', ''))
@@ -332,8 +348,14 @@ class UDAPIConfigSync(OPNsenseConfigSync):
             if iface.network.prefixlen == iface.network.max_prefixlen:
                 continue
             for ident, nets in self._interface_networks_cached().items():
-                if any(iface.ip in n for n in nets):
-                    return ident
+                if any(iface.network == n if kind in ('vlan', 'bridge') else iface.ip in n for n in nets):
+                    candidates.add(ident)
+        if len(candidates) == 1:
+            return next(iter(candidates))
+        if candidates or kind == 'vlan' or (kind == 'bridge' and body.get('addresses')):
+            # An unresolved tagged network must not inherit its physical LAN's
+            # identity: that would apply DHCP/firewall controls to the LAN.
+            return None
         lower = [m.get('id') for m in (body.get('bridge') or {}).get('interfaces') or []]
         for key in ('vlan', 'pppoe'):
             parent = (body.get(key) or {}).get('interface')

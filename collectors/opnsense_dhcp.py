@@ -7,7 +7,7 @@ import hashlib
 import ipaddress
 
 from .opnsense_sync import ItemSpec, make_tag, parse_tag, _row_value
-from .opnsense_api import OPNsenseAPIError
+from .opnsense_api import OPNsenseAPI, OPNsenseAPIError
 
 
 def _spec(kind, wrapper):
@@ -95,6 +95,22 @@ def sync_servers(sync, servers):
                 raise ValueError('local DHCP pool conflicts with an existing relay')
     existing = sync.api.search(RANGES.search)
     existing_options = sync.api.search(OPTIONS.search)
+    listeners = None
+    if ranges:
+        settings = sync.api.get('dnsmasq/settings/get').get('dnsmasq') or {}
+        if str(settings.get('enable')) != '1':
+            raise ValueError('Dnsmasq must be enabled before adding server pools')
+        selected = set(filter(None, _row_value(settings, 'interface').split(',')))
+        excluded = set(filter(None, _row_value(settings.get('dhcp') or {}, 'no_interface').split(',')))
+        required = {p['interface'] for p in ranges.values()}
+        if required & excluded:
+            raise ValueError('DHCP is explicitly disabled on a requested interface')
+        if selected and not required <= selected:
+            for interface in required - selected:
+                detail = sync.api.get('interfaces/assignment/get_item/' + interface).get('interface') or {}
+                if not str(detail.get('descr') or '').startswith('ufg_vlan_'):
+                    raise ValueError('Dnsmasq listener expansion requires a managed VLAN assignment')
+            listeners = ','.join(sorted(selected | required))
     for row in existing:
         if str(parse_tag(row.get('description')) or '').startswith('pool-'):
             continue
@@ -113,7 +129,10 @@ def sync_servers(sync, servers):
     # Keep unrelated tagged objects if this backend grows more collections.
     changed, _ = sync.sync_items(RANGES, ranges, keep=lambda key: not key.startswith('pool-'))
     option_changed, _ = sync.sync_items(OPTIONS, options, keep=lambda key: not key.startswith('pool-'))
-    if changed or option_changed:
+    if listeners is not None:
+        result = sync.api.post('dnsmasq/settings/set', {'dnsmasq': {'interface': listeners}})
+        OPNsenseAPI.check_saved(result, 'include managed VLAN DHCP listener')
+    if changed or option_changed or listeners is not None:
         result = sync.api.post('dnsmasq/service/reconfigure')
         if not isinstance(result, dict) or result.get('status') != 'ok':
             raise OPNsenseAPIError('Dnsmasq reconfigure failed')

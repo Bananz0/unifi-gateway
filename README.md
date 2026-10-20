@@ -248,6 +248,21 @@ speed. It does not estimate extra byte totals or replay pre-installation history
 
 **Running from source on OPNsense:** OPNsense doesn't ship psutil or pycryptodome, and neither is required here — the inform encryption falls back to the `cryptography` package OPNsense already includes, and host stats come from the API. Copy the sources to e.g. `/usr/local/lib/unifi-gateway` and run `python3 unifi_gateway.py run`.
 
+**Owned LAN VLAN provisioning (in development):** OPNsense 26.7.7's assignment API
+can create tagged LAN interfaces with static IPv4/IPv6, IPv4 DHCP-client mode and
+MTU settings. The UDAPI translator prepares these interfaces before translating
+DHCP/firewall references; an unresolved VLAN never inherits the parent LAN's
+identity. Dnsmasq adds managed VLANs to an explicit listener list when necessary,
+preserving its DNS port and existing listeners. Removed managed networks are
+disabled after pool/rule reconciliation. Assignments are retained because the
+vendor deletion API can also delete unrelated legacy firewall rules.
+
+This path has isolated lab lease/tagging and rollback evidence, but complete
+new-network firewall defaults and Internet access are not yet validated. Native
+WAN/LAN edits, WAN VLANs, multi-port bridges, DHCPv6 delegation/RA and final
+assignment garbage collection remain incomplete. Set `apply_interfaces = false`
+in `[opnsense]` to disable interface writes while those gaps are addressed.
+
 DNS host overrides are created with a 60 s TTL. If AdGuard Home sits in front of Unbound with optimistic caching on, it can still serve a removed record for up to `cache_optimistic_max_age`.
 
 Everything the daemon creates is tagged `unifi-gw:` in its description, and only tagged objects are changed or removed — your own rules and aliases are never touched. The controller's built-in rules (rule numbers 3000–3999 and 6000+, default actions, masquerade NAT) are deliberately not copied: OPNsense already has stateful defaults and automatic outbound NAT. Each section can be switched off in `[opnsense]` (see the reference below).
@@ -371,7 +386,8 @@ Used when `platform = opnsense` (or auto-detected on OPNsense).
 | `timeout` | `30` | API request timeout in seconds |
 | `apply_firewall` | `true` | Apply controller firewall rules and groups |
 | `apply_port_forward` | `true` | Apply controller port forwards |
-| `apply_dhcp` | `true` | Apply DHCP static mappings (Kea/Dnsmasq) |
+| `apply_dhcp` | `true` | Apply reservations; Dnsmasq pools/options and DHCP relay |
+| `apply_interfaces` | `true` | Provision owned LAN VLANs through the 26.7.7 assignment API; see development limits above |
 | `apply_dns` | `true` | Apply static DNS host records |
 | `apply_routes` | `true` | Apply static routes |
 | `block_clients` | `true` | Act on block/unblock client requests |

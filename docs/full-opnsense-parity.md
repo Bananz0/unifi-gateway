@@ -9,10 +9,10 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 | Area | Current implementation / gap | Required completion evidence |
 |---|---|---|
 | Physical ports | Discovery deployed, preserving existing mappings; the missing disabled WAN2 is reported on port 4. UXGB capacity is five. VLANs, bridges, radios and tunnels are separate resources. | More NIC/driver/model combinations and restart coverage remain to be validated. |
-| Interfaces / VLAN IDs | Address/counter telemetry exists; VLAN creation, parent assignment, tagging, bridge membership and interface writes are missing. | Create/edit/remove tagged network in lab, verify packet tags, DHCP and isolation; protect management access. |
-| IPv4 | Selected firewall, DNAT, DNS records, reservations and routes translate. Full address, gateway, DHCP-client, MTU/MSS and policy routing configuration is missing. | Compare actual interface/routing/filter state with the requested values; connectivity and rollback tests. |
-| IPv6 | Selected rule/route handling exists, not a complete IPv6 stack translator. | Static/SLAAC/DHCPv6 WAN, prefix delegation, LAN prefixes, router advertisements, DHCPv6 and DNS, ICMPv6, firewall and routes tested with real clients. |
-| DHCP server | Dnsmasq IPv4 pools, lease duration, subnet mask, domain, router/DNS options and scoped cleanup implemented; real OPNsense API lifecycle tested, alongside existing reservations. Unmanaged pool/option conflicts are rejected. Production deployment and real-client validation pending. | Exclusions, NTP, PXE/TFTP, custom options and IPv6 as supported by the actual UniFi schema; verify client leases/options. Keep Dnsmasq as the production backend. |
+| Interfaces / VLAN IDs | Owned LAN VLAN creation, parent resolution, stable optN assignment, MTU, address writes/readback, rollback and retirement by disabling are implemented in source. Single-member bridge wrappers collapse onto the VLAN; an unchanged native LAN is reused. Lab tagged DHCP lease verified. Not deployed to production. | Multi-port bridge/switch configuration, native-interface edits, safe assignment deletion, full controller captures, firewall defaults and Internet-access validation. |
+| IPv4 | Selected firewall, DNAT, DNS records, reservations and routes translate. Owned LAN VLANs now support static/DHCP-client address modes and MTU. Primary WAN/LAN address/gateway/client writes, MSS and full policy routing remain missing. | Compare actual interface/routing/filter state with requested values; full connectivity and recovery tests. |
+| IPv6 | Owned VLAN static IPv6 and explicit SLAAC mode writes exist alongside selected rule/route handling. Static address confirmed in the lab kernel. This is not a complete IPv6 stack translator. | DHCPv6 WAN, prefix delegation, LAN prefixes, router advertisements, DHCPv6 and DNS, ICMPv6, firewall and routes tested with real clients. |
+| DHCP server | Dnsmasq IPv4 pools, lease duration, subnet mask, domain, router/DNS options, managed listener expansion and scoped cleanup implemented. Real isolated VLAN client received the requested lease/options. Unmanaged conflicts are rejected. Production deployment pending. | Exclusions, NTP, PXE/TFTP, custom options and IPv6 as supported by the actual UniFi schema; controller-driven network defaults and client reachability. Keep Dnsmasq as the production backend. |
 | DHCP relay | DHCRelay destinations and relay lifecycle implemented in source, including IPv4/IPv6 address-family validation. Self-relay declarations are ignored; unmanaged relays and competing local pools are protected. | Real API and DHCPv4/DHCPv6 packet tests; relay-agent options and role transitions remain incomplete. |
 | VPN | Missing translation for tunnel configuration and status. Existing OPNsense OpenVPN configuration is independent. | WireGuard first, then OpenVPN/IPsec mappings where controller schemas exist; peers, keys/certs, routes, DNS, firewall/NAT, handshakes and client data transfer. Teleport/Site Magic are not assumed equivalent. |
 | Smart Queues / QoS | Missing. | Map rates/directions/flow isolation to OPNsense traffic shaping; test upload/download throughput, loaded latency and queue counters. Report differences in scheduling semantics. |
@@ -81,6 +81,53 @@ interface inventory cache to refresh before assignment validation accepted it.
 An assignment add response UUID differed from the subsequent stable opt1
 identifier. Future interface provisioning must read back the assignment and
 handle version/cache differences before dependent DHCP/firewall writes.
+
+## VLAN, lease and rollback validation, 2026-10-20
+
+The isolated nano VM's `opnsense` package was upgraded from 26.7 to 26.7.7 to
+match the production interface API model. This does not claim a full kernel/base
+system upgrade. New owned VLAN 208 read back as a stable opt2 assignment with
+IPv4 10.208.0.1/24, IPv6 fd00:208::1/64 and MTU 1500. Kernel `ifconfig` confirmed
+both addresses, VLAN ID 208, 802.1Q and the parent vtnet1. A second identical
+provisioning issued zero POSTs. An edit to 10.208.0.254/24 and MTU 1400 applied
+and was restored.
+
+A separate virtual epair trunk and VNET jail exercised VLAN 209 without any
+connection to production LANs. The translated Dnsmasq server added only its
+managed opt4 listener while retaining LAN and DNS port 53053. The client completed
+DISCOVER/OFFER/REQUEST/ACK and received 10.209.0.37/24, router 10.209.0.1,
+DNS 1.1.1.1, guest.home and a 7200-second lease. A 748-byte pcap contains the
+client DISCOVER and REQUEST frames with explicit 802.1Q VLAN 209 tags. The client
+log provides the OFFER/ACK evidence; the pcap does not contain those responses.
+An adjacent VLAN 210 client received no offer during an eight-second test.
+This is a bounded DHCP segregation test, not a complete firewall isolation matrix.
+
+Injecting an assignment-apply failure exposed a vendor pending-edit behavior:
+writing the old values back can leave the newer todo entry intact when those
+old values equal the committed configuration. Rollback now first stages a
+distinct disabled IPv6 mode, verifies it, applies while disabled, then restores
+and verifies the original profile. No temporary global IPv6 address is enabled.
+The repeated real API test restored VLAN 208, IPv4/IPv6, MTU and enabled state,
+and `/interfaces/assignment/pending` returned `ok`. A regression fake models
+the separate committed/todo state rather than assuming immediate API writes.
+
+Removing managed pools before retirement disabled only the owned opt2/opt4
+interfaces; the native LAN remained enabled at 192.168.1.1/24. Assignments and
+VLAN definitions are retained, because vendor assignment deletion also removes
+legacy firewall references without respecting bridge ownership tags. Safe
+reference auditing/deletion remains incomplete. Existing unrelated pending
+interface changes prevent global apply. Transient provisioning errors now retain
+the latest configuration for a serialized retry instead of caching its hash as
+success. New controller requests supersede older pending requests.
+
+Evidence is retained on phastos under
+`/home/glenm/unifi-opnsense-lab/evidence/`: `vlan209.pcap`, `dhcp209.json`,
+`interface208.txt`, `rollback208.json`, and `retirement.json`. These contain lab
+data, not production credentials. The new interface pipeline remains source/lab
+only until managed-network firewall defaults, Internet access and additional
+controller schema captures are validated. Production's app-control worker and
+existing LAN were not changed in this phase. The combined suite passes 387 tests;
+that count does not establish full gateway parity.
 
 ## Instagram blocking investigation, 2026-10-20
 

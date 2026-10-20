@@ -58,6 +58,7 @@ DEFAULTS = {
     'apply_dns': 'true',
     'apply_routes': 'true',
     'apply_ids': 'true',
+    'apply_interfaces': 'true',
     'ips': 'false',
     'block_clients': 'true',
     'allow_reboot': 'false',
@@ -131,6 +132,9 @@ class OPNSenseCollector(FreeBSDCollector):
         self.fwlog = None
         self._policy_cache = (0, {})
         self._trigger_tags = {}
+        self._provision_lock = threading.RLock()
+        self._provision_retry_thread = None
+        self._pending_system_cfg = None
         self._init_mirror(config)
         if str(self.opts['dpi']).lower() not in ('0', 'false', 'no', 'off'):
             dpi = ZenarmorDPI(self.opts['zenarmor_db'],
@@ -149,7 +153,7 @@ class OPNSenseCollector(FreeBSDCollector):
         if self.api:
             options = {k: self._bool(k) for k in (
                 'apply_firewall', 'apply_port_forward', 'apply_dhcp',
-                'apply_dns', 'apply_routes', 'apply_ids')}
+                'apply_dns', 'apply_routes', 'apply_ids', 'apply_interfaces')}
             self.sync = OPNsenseConfigSync(
                 self.api, self.port_identifier, self.lan_identifiers,
                 options=options)
@@ -1019,16 +1023,44 @@ class OPNSenseCollector(FreeBSDCollector):
     def apply_system_cfg(self, cfg, force=False):
         if not self.sync:
             return False
-        self._trigger_tags = trigger_tags(cfg)
-        digest = _digest(cfg)
-        if not force and digest == self._state.get('system_cfg_hash'):
+        with self._provision_lock:
+            self._trigger_tags = trigger_tags(cfg)
+            self._pending_system_cfg = None
+            digest = _digest(cfg)
+            if not force and digest == self._state.get('system_cfg_hash'):
+                return True
+            sync = self.udapi_sync if is_udapi_config(cfg) else self.sync
+            try:
+                summary = sync.apply_system_cfg(cfg)
+            except OPNsenseAPIError:
+                self._pending_system_cfg = json.loads(json.dumps(cfg))
+                if not self._provision_retry_thread or not self._provision_retry_thread.is_alive():
+                    self._provision_retry_thread = threading.Thread(
+                        target=self._provision_retry_loop, daemon=True, name='opnsense-provision-retry')
+                    self._provision_retry_thread.start()
+                raise
+            logger.info('Applied controller config to OPNsense: %s', json.dumps(summary))
+            self._state['system_cfg_hash'] = digest
+            self._save_state()
             return True
-        sync = self.udapi_sync if is_udapi_config(cfg) else self.sync
-        summary = sync.apply_system_cfg(cfg)
-        logger.info('Applied controller config to OPNsense: %s', json.dumps(summary))
-        self._state['system_cfg_hash'] = digest
-        self._save_state()
-        return True
+
+    def _provision_retry_loop(self):
+        previous = None
+        while True:
+            time.sleep(30)
+            with self._provision_lock:
+                if self._pending_system_cfg is None:
+                    continue
+                try:
+                    self.apply_system_cfg(self._pending_system_cfg, force=True)
+                    previous = None
+                except OPNsenseAPIError as e:
+                    if str(e) != previous:
+                        logger.warning('OPNsense provisioning remains pending: %s', e)
+                        previous = str(e)
+                except Exception as e:
+                    self._pending_system_cfg = None
+                    logger.warning('OPNsense provisioning rejected: %s', e)
 
     def reboot(self):
         if not self.api or not self._bool('allow_reboot'):
