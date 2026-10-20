@@ -33,6 +33,7 @@ from .opnsense_api import OPNsenseAPI, OPNsenseAPIError
 from .opnsense_sync import OPNsenseConfigSync, normalize_mac
 from .opnsense_udapi import UDAPIConfigSync, is_udapi_config
 from .zenarmor import ZenarmorDPI
+from .opnsense_fwlog import FirewallLogTriggers
 from .netflow import NetflowTotals
 from .unifi_mirror import OPNsenseMirror, UniFiController
 
@@ -112,6 +113,8 @@ class OPNSenseCollector(FreeBSDCollector):
                 self._traffic_source = 'netflow-buckets'
         self.mirror = None
         self._mirror_thread = None
+        self.fwlog = None
+        self._policy_cache = (0, {})
         self._init_mirror(config)
         if str(self.opts['dpi']).lower() not in ('0', 'false', 'no', 'off'):
             dpi = ZenarmorDPI(self.opts['zenarmor_db'],
@@ -173,6 +176,29 @@ class OPNSenseCollector(FreeBSDCollector):
         self.mirror = OPNsenseMirror(self.api, controller, self.lan_identifiers,
                                      self.wan_identifiers)
         logger.info('Mirroring OPNsense config into the UniFi controller at %s', url)
+
+    def _firewall_log(self):
+        if self.fwlog is None:
+            names = {}
+            for port in self.ports:
+                kind = port['type'].lower()
+                names[port['realif']] = 'wan' if kind == 'wan' else (
+                    'lan' if kind == 'lan' else port['ifname'])
+            self.fwlog = FirewallLogTriggers(self.api, names, self._policy_ids)
+            logger.info('Reporting OPNsense firewall blocks as Traffic Flows')
+        return self.fwlog
+
+    def _policy_ids(self):
+        """{OPNsense rule description: id of its mirrored UniFi rule}."""
+        stamp, ids = self._policy_cache
+        if self.mirror is None or time.time() - stamp < 300:
+            return ids
+        prefix = '[OPNsense] '
+        ids = {r['name'][len(prefix):].rstrip('*'): r['_id']
+               for r in self.mirror.ctl.call('GET', 'rest/firewallrule')
+               if str(r.get('name', '')).startswith(prefix)}
+        self._policy_cache = (time.time(), ids)
+        return ids
 
     @staticmethod
     def _controller_url(config):
@@ -315,6 +341,8 @@ class OPNSenseCollector(FreeBSDCollector):
             self.data['dpi_stats'] = self.dpi.payload()
             if self.dpi.flows:
                 self.data['connections'] = self.dpi.take_connections()
+        if self.fwlog:
+            self.data['triggers'] = self.fwlog.take()
         if not self.local:
             uptime = self._get_uptime()
             if uptime:
@@ -702,6 +730,11 @@ class OPNSenseCollector(FreeBSDCollector):
                     self.dpi.poll()
                 except Exception as e:
                     logger.debug('Zenarmor DPI poll failed: %s', e)
+            if self.api and self._bool('flows'):
+                try:
+                    self._firewall_log().poll()
+                except Exception as e:
+                    logger.debug('Firewall log poll failed: %s', e)
             time.sleep(max(1, interval - (time.time() - started)))
 
     def sample_traffic(self, elapsed):

@@ -172,3 +172,18 @@ def test_connections_use_udapi_interface_names():
     assert p['connections'][0]['in'] == 'br0' and p['connections'][0]['out'] == 'eth4'
     assert p['connections'][0]['ip'] == flow['ip']
     assert 'connections' not in inform()
+
+
+def test_capabilities_advertise_only_implemented_features():
+    caps = inform()['usg_caps']
+    assert caps & 0x20000000            # trigger logs -> blocked Traffic Flows
+    assert caps & 1                     # DPI
+    for unsupported in (128, 0x40000000, 64, 32):   # IPS, ad block, GeoIP, schedules
+        assert not caps & unsupported
+
+
+def test_triggers_use_udapi_interface_names():
+    trig = {'id': '000000000000000000000001', 'type': 'FIREWALL_RULE', 'in': 'wan',
+            'ip': {'saddr': '79.124.62.230', 'daddr': '203.0.113.2', 'protocol': 6}}
+    p = inform(dc=DC(triggers=[trig]))
+    assert p['triggers'][0]['in'] == 'eth4' and 'out' not in p['triggers'][0]

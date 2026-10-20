@@ -46,8 +46,16 @@ UXG_MODELS = {'UXG', 'UXGB', 'UXGPRO', 'UXGA6AA'}
 # The controller warns "Skip updating capability ... due to empty
 # udapi_version" without it; this value was accepted in the lab adoption.
 UDAPI_VERSION = {'major': 1, 'minor': 0}
-# Schema not yet known; sent only when a noop asks for it in include_blocks.
+# The controller stores this verbatim as the device's gw_caps.caps; on
+# Network 10.6 it only carries IPS engine data (Suricata versions), which
+# this emulator doesn't provide, so it is empty. Sent when a noop asks for it.
 GW_CAPS = {}
+# usg_caps bits (Network 10.6 device model): only what the emulator
+# implements. 1 = DPI (also implied by has_dpi), 0x20000000 = trigger logs:
+# firewall triggers in the inform become blocked Traffic Flows. IPS (128),
+# ad blocking (0x40000000), GeoIP filtering (64) and schedules (32) stay off,
+# so the controller doesn't offer settings the translator can't apply.
+USG_CAPS = 0x1 | 0x20000000
 AES_BLOCK_SIZE = 16
 
 
@@ -464,16 +472,18 @@ def _create_uxg_inform(config, dc, include_blocks=()):
             'uptime': str(device_uptime),
         },
         'has_dpi': 'dpi_stats' in dc.data,
+        'usg_caps': USG_CAPS,
     }
     if 'dpi_stats' in dc.data:
         payload['dpi_stats'] = _modern_dpi_stats(dc.data['dpi_stats'])
-    if dc.data.get('connections'):
-        # Traffic Flows: conntrack entries with UDAPI interface names
-        names = {'lan': _uxg_network_name(by_name[lan_if], lan_if), 'wan': wan_if}
-        payload['connections'] = [
-            {**c, 'in': names.get(c.get('in'), c.get('in')),
-             'out': names.get(c.get('out'), c.get('out'))}
-            for c in dc.data['connections']]
+    # Traffic Flows: allowed connections (conntrack) and firewall blocks
+    # (triggers), with UDAPI interface names
+    names = {'lan': _uxg_network_name(by_name[lan_if], lan_if), 'wan': wan_if}
+    for key in ('connections', 'triggers'):
+        if dc.data.get(key):
+            payload[key] = [{**c, **{side: names.get(c[side], c[side])
+                                     for side in ('in', 'out') if side in c}}
+                            for c in dc.data[key]]
     if 'gw_caps' in (include_blocks or ()):
         payload['gw_caps'] = dict(GW_CAPS)
     return json.dumps(payload)
