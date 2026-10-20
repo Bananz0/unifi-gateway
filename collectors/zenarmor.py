@@ -12,6 +12,8 @@ Names are matched exactly against UniFi's application list first, then via
 known aliases; anything else is reported as "other" within the closest
 UniFi category.
 """
+import collections
+import ipaddress
 import logging
 import json
 import os
@@ -28,6 +30,11 @@ logger = logging.getLogger('unifi-gateway')
 
 DEFAULT_DB = '/usr/local/datastore/sqlite/conn_all.sqlite'
 OTHER_APP = 0xffff          # "other" application within a category
+IP_PROTOCOLS = {'tcp': 6, 'udp': 17, 'icmp': 1, 'icmpv6': 58, 'ipv6-icmp': 58,
+                'gre': 47, 'esp': 50, 'sctp': 132}
+FLOW_COLUMNS = ('ip_src_saddr', 'ip_src_port', 'ip_dst_saddr', 'ip_dst_port',
+                'transport_proto', 'end_time', 'dst_hostname', 'is_blocked')
+MAX_PENDING_FLOWS = 2000
 UNKNOWN_CAT = 255
 
 # Zenarmor category -> UniFi category id
@@ -136,6 +143,9 @@ class ZenarmorDPI:
         self._state_file = state_file
         self._excluded_macs = set()
         self._mapping = {}
+        # finished connections not yet sent as UXG flow ("connections") records
+        self.flows = False
+        self._connections = collections.deque(maxlen=MAX_PENDING_FLOWS)
         self._load_state()
 
     def exclude_macs(self, macs):
@@ -222,6 +232,8 @@ class ZenarmorDPI:
                 self._last_id = 0       # Zenarmor recreated its database
             optional = [c for c in ('direction', 'dst_hwaddr', 'dst_country_name',
                         'src_country_name', 'conn_uuid') if c in columns]
+            if self.flows:
+                optional += [c for c in FLOW_COLUMNS if c in columns]
             rows = conn.execute(
                 'select id, src_hwaddr, app_name, app_category, src_nbytes, '
                 'dst_nbytes, src_npackets, dst_npackets' +
@@ -262,6 +274,10 @@ class ZenarmorDPI:
                     cs[1] += sent
                 label = (row['app_name'], row['app_category'], key)
                 self._mapping[label] = self._mapping.get(label, 0) + received + sent
+                if self.flows:
+                    flow = _connection(row, inbound, iso)
+                    if flow:
+                        self._connections.append(flow)
         self._save_state()
         return len(rows)
 
@@ -281,6 +297,12 @@ class ZenarmorDPI:
                 } for (cat, app), c in sorted(apps.items())],
             } for mac, apps in sorted(self._stats.items()) if mac not in self._excluded_macs]
 
+    def take_connections(self, limit=500):
+        """Finished connections for the next inform, oldest first."""
+        with self._lock:
+            return [self._connections.popleft()
+                    for _ in range(min(limit, len(self._connections)))]
+
     def mapping_report(self):
         """Classification coverage for diagnostics; never sent as invented apps."""
         with self._lock:
@@ -288,3 +310,49 @@ class ZenarmorDPI:
                      'app': key[1], 'bytes': count}
                     for (name, category, key), count in
                     sorted(self._mapping.items(), key=lambda item: -item[1])]
+
+
+def _connection(row, inbound, country):
+    """A Zenarmor row as a UXG conntrack ``connections`` entry (the format
+    Network 10.6 reads into Traffic Flows). The client is always the source;
+    rx/tx are from its side. Blocked connections are left out: this path
+    records every entry as allowed traffic."""
+    keys = row.keys()
+    if 'ip_src_saddr' not in keys or ('is_blocked' in keys and row['is_blocked']):
+        return None
+    src, dst = row['ip_src_saddr'], row['ip_dst_saddr']
+    sport, dport = row['ip_src_port'], row['ip_dst_port']
+    out_bytes, in_bytes = row['src_nbytes'], row['dst_nbytes']
+    out_pkts, in_pkts = row['src_npackets'], row['dst_npackets']
+    if inbound:
+        src, dst, sport, dport = dst, src, dport, sport
+        out_bytes, in_bytes, out_pkts, in_pkts = in_bytes, out_bytes, in_pkts, out_pkts
+    try:
+        version = ipaddress.ip_address(src).version
+        ipaddress.ip_address(dst)
+    except (TypeError, ValueError):
+        return None
+    protocol = IP_PROTOCOLS.get(str(row['transport_proto'] or '').lower())
+    if protocol is None:
+        return None
+    ended = row['end_time'] or 0
+    flow = {
+        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(int(ended) / 1000))
+                     + '.%03dZ' % (int(ended) % 1000) if ended else None,
+        'ip': {'saddr': src, 'daddr': dst, 'protocol': protocol,
+               'version': 'v%d' % version,
+               **({'sport': int(sport), 'dport': int(dport)}
+                  if protocol in (6, 17, 132) and sport and dport else {})},
+        'stats': {'rxBytes': max(0, int(in_bytes or 0)), 'rxPackets': max(0, int(in_pkts or 0)),
+                  'txBytes': max(0, int(out_bytes or 0)), 'txPackets': max(0, int(out_pkts or 0))},
+        # the remote end is reached through the WAN; the protocol layer swaps
+        # these placeholders for the gateway's UDAPI interface names
+        'in': 'wan' if inbound else 'lan',
+        'out': 'lan' if inbound else 'wan',
+    }
+    host = str(row['dst_hostname'] or '') if 'dst_hostname' in keys and not inbound else ''
+    if host and host != dst:
+        flow['hostnames'] = [host]
+    if country:
+        flow['country'] = country
+    return {k: v for k, v in flow.items() if v is not None}

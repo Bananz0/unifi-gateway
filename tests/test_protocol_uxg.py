@@ -161,3 +161,14 @@ class TestPayload:
             data = create_inform(cfg, DC())
         packet = unifi_protocol.encode_inform(cfg, data)
         assert unifi_protocol.decode_inform(cfg, packet)['model'] == 'UXGB'
+
+
+def test_connections_use_udapi_interface_names():
+    flow = {'ip': {'saddr': '192.168.1.50', 'daddr': '1.1.1.1', 'protocol': 17,
+                   'version': 'v4', 'sport': 5000, 'dport': 53},
+            'stats': {'rxBytes': 1, 'rxPackets': 1, 'txBytes': 1, 'txPackets': 1},
+            'in': 'lan', 'out': 'wan'}
+    p = inform(dc=DC(connections=[flow]))
+    assert p['connections'][0]['in'] == 'br0' and p['connections'][0]['out'] == 'eth4'
+    assert p['connections'][0]['ip'] == flow['ip']
+    assert 'connections' not in inform()

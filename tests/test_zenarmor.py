@@ -160,3 +160,75 @@ class TestPolling:
                                   ('South Korea', 'KR'), ('KE', 'KE'), ('', None), ('unknown', None)])
 def test_country_code(name, iso):
     assert country_code(name) == iso
+
+
+def make_flow_db(path):
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        'create table conn_all (id integer primary key, src_hwaddr text, dst_hwaddr text, '
+        'app_name text, app_category text, src_nbytes int, dst_nbytes int, '
+        'src_npackets int, dst_npackets int, direction text, dst_country_name text, '
+        'src_country_name text, ip_src_saddr text, ip_src_port int, ip_dst_saddr text, '
+        'ip_dst_port int, transport_proto text, end_time int, dst_hostname text, '
+        'is_blocked int)')
+    conn.commit()
+    return conn
+
+
+def add_flow(conn, **row):
+    base = {'src_hwaddr': 'd494a9f4e124', 'dst_hwaddr': '802aa8987653',
+            'app_name': 'YouTube', 'app_category': 'Media Streaming',
+            'src_nbytes': 100, 'dst_nbytes': 5000, 'src_npackets': 3, 'dst_npackets': 7,
+            'direction': 'out', 'dst_country_name': 'United States',
+            'ip_src_saddr': '10.0.5.20', 'ip_src_port': 50000,
+            'ip_dst_saddr': '142.250.1.1', 'ip_dst_port': 443,
+            'transport_proto': 'TCP', 'end_time': 1792455681123,
+            'dst_hostname': 'www.youtube.com', 'is_blocked': 0}
+    base.update(row)
+    conn.execute('insert into conn_all (%s) values (%s)' % (
+        ', '.join(base), ', '.join('?' * len(base))), list(base.values()))
+    conn.commit()
+
+
+class TestFlows:
+
+    def poll(self, tmp_path, *rows, flows=True):
+        conn = make_flow_db(tmp_path / 'conn_all.sqlite')
+        dpi = ZenarmorDPI(str(tmp_path / 'conn_all.sqlite'))
+        dpi.flows = flows
+        dpi.poll()
+        for row in rows:
+            add_flow(conn, **row)
+        dpi.poll()
+        return dpi
+
+    def test_outbound_connection(self, tmp_path):
+        [flow] = self.poll(tmp_path, {}).take_connections()
+        assert flow == {
+            'timestamp': '2026-10-20T00:21:21.123Z',
+            'ip': {'saddr': '10.0.5.20', 'daddr': '142.250.1.1', 'protocol': 6,
+                   'version': 'v4', 'sport': 50000, 'dport': 443},
+            'stats': {'rxBytes': 5000, 'rxPackets': 7, 'txBytes': 100, 'txPackets': 3},
+            'in': 'lan', 'out': 'wan', 'hostnames': ['www.youtube.com'], 'country': 'US'}
+
+    def test_inbound_connection_has_client_as_source(self, tmp_path):
+        [flow] = self.poll(tmp_path, {
+            'direction': 'in', 'dst_hwaddr': 'd494a9f4e124', 'src_hwaddr': '802aa8987651',
+            'ip_src_saddr': '198.51.100.7', 'ip_src_port': 40000,
+            'ip_dst_saddr': '10.0.5.20', 'ip_dst_port': 32400,
+            'src_country_name': 'Kenya', 'dst_hostname': '10.0.5.20'}).take_connections()
+        assert flow['ip']['saddr'] == '10.0.5.20' and flow['ip']['sport'] == 32400
+        assert flow['ip']['daddr'] == '198.51.100.7' and flow['ip']['dport'] == 40000
+        assert flow['stats']['txBytes'] == 5000 and flow['stats']['rxBytes'] == 100
+        assert (flow['in'], flow['out'], flow['country']) == ('wan', 'lan', 'KE')
+        assert 'hostnames' not in flow
+
+    def test_blocked_unknown_protocol_and_disabled_are_skipped(self, tmp_path):
+        dpi = self.poll(tmp_path, {'is_blocked': 1}, {'transport_proto': 'weird'},
+                        {'transport_proto': 'ICMP', 'ip_src_port': 0, 'ip_dst_port': 0})
+        [icmp] = dpi.take_connections()
+        assert icmp['ip']['protocol'] == 1 and 'sport' not in icmp['ip']
+        assert dpi.take_connections() == []
+        off = tmp_path / 'off'
+        off.mkdir()
+        assert self.poll(off, {}, flows=False).take_connections() == []

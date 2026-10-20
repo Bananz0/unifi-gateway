@@ -467,6 +467,13 @@ def _create_uxg_inform(config, dc, include_blocks=()):
     }
     if 'dpi_stats' in dc.data:
         payload['dpi_stats'] = _modern_dpi_stats(dc.data['dpi_stats'])
+    if dc.data.get('connections'):
+        # Traffic Flows: conntrack entries with UDAPI interface names
+        names = {'lan': _uxg_network_name(by_name[lan_if], lan_if), 'wan': wan_if}
+        payload['connections'] = [
+            {**c, 'in': names.get(c.get('in'), c.get('in')),
+             'out': names.get(c.get('out'), c.get('out'))}
+            for c in dc.data['connections']]
     if 'gw_caps' in (include_blocks or ()):
         payload['gw_caps'] = dict(GW_CAPS)
     return json.dumps(payload)

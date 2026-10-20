@@ -57,6 +57,7 @@ DEFAULTS = {
     'host_active_window': '300',
     'state_file': '',
     'dpi': 'auto',
+    'flows': 'false',
     'zenarmor_db': '/usr/local/datastore/sqlite/conn_all.sqlite',
     'netflow_db': '/var/netflow/src_addr_000300.sqlite',
 }
@@ -117,6 +118,9 @@ class OPNSenseCollector(FreeBSDCollector):
                 state_file=os.path.join(os.path.dirname(self._state_path()), 'zenarmor-dpi.json'))
             if dpi.available:
                 self.dpi = dpi
+                dpi.flows = self._bool('flows')
+                if dpi.flows:
+                    logger.info('Reporting Zenarmor connections as Traffic Flows')
                 logger.info('Reporting DPI statistics from Zenarmor (%s)', dpi.db_path)
             elif str(self.opts['dpi']).lower() not in ('auto',):
                 logger.warning('Zenarmor database %s not found, DPI disabled', dpi.db_path)
@@ -309,6 +313,8 @@ class OPNSenseCollector(FreeBSDCollector):
                 self.data['wan_type'] = row['link_type']
         if self.dpi:
             self.data['dpi_stats'] = self.dpi.payload()
+            if self.dpi.flows:
+                self.data['connections'] = self.dpi.take_connections()
         if not self.local:
             uptime = self._get_uptime()
             if uptime:
