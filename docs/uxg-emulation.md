@@ -93,6 +93,20 @@ live test adoption in a lab controller:
   (`unifi-mq-broker` → `unifi_flow_queue`) is what a real UXG uses for
   blocked/IPS events; this emulator doesn't need it.
 
+- **Blocked traffic in Flows (verified 2026-10-20 in production).** Firewall hits
+  are sent as inform `triggers`: `{id: <UniFi policy _id>, type: FIREWALL_RULE |
+  PORT_FORWARDING | ..., timestamp, ip{saddr,sport,daddr,dport,protocol,version},
+  ethernet{protocol,family}, stats{bytes,packets}, in/out}`. The controller
+  only reads them from devices with `usg_caps` bit 0x20000000
+  (supportsTriggerLogs), and only stores one when the policy resolves to a
+  block/reject action. So the mirror adds OPNsense's built-in default deny as
+  `[OPNsense] Default deny / state violation rule` (last WAN_IN drop rule), and
+  `collectors/opnsense_fwlog.py` attributes firewall-log blocks to the mirrored
+  rule with the same label. Result: blocked, incoming flows attributed to that
+  policy, as on a real UXG.
+- **`usg_caps`** is now sent with only the implemented bits (DPI, trigger logs).
+  `gw_caps` only holds IPS engine data on 10.6 and stays empty.
+
 ## UXG mode (branch `feat/uxg-mode`)
 
 Set `device = UXGB` (or `UXG`, `UXGPRO`, `UXGA6AA`) in `[gateway]`, with
