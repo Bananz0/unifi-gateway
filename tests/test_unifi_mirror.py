@@ -95,6 +95,16 @@ class FakeController:
             return [{'_id': 'lan-net', 'purpose': 'corporate', 'ip_subnet': '10.0.5.1/24'}]
         if path == 'stat/device':
             return [{'mac': 'd0:21:f9:72:bb:c4'}]
+        if path.startswith('v2/content-filtering'):
+            profiles = self.store.setdefault('content-filtering', [])
+            if method == 'GET':
+                return copy.deepcopy(profiles)
+            self.writes.append((method, path))
+            if path.endswith('/create'):
+                profiles.append(dict(payload, _id=self.next_id()))
+            elif method == 'DELETE':
+                profiles[:] = [p for p in profiles if p['_id'] != path.split('/')[-1]]
+            return []
         parts = path.split('/')
         coll = self.store[parts[1]]
         if method == 'GET':
@@ -233,3 +243,28 @@ def test_rule_numbers_skip_operator_rules(mirror):
     rules = [r for r in mirror.ctl.store['firewallrule'] if r['_id'] != 'own']
     lan_in = sorted(r['rule_index'] for r in rules if r['ruleset'] == 'LAN_IN')
     assert lan_in and 2000 not in lan_in and lan_in[0] == 2001
+
+
+ADGUARD_YAML = """http:
+  address: 0.0.0.0:3000
+filtering:
+  protection_enabled: %s
+  filtering_enabled: true
+"""
+
+
+def test_ad_blocking_follows_adguard(mirror, tmp_path):
+    conf = tmp_path / 'AdGuardHome.yaml'
+    mirror.adguard_config = str(conf)
+    assert mirror.mirror_ad_blocking() == 0            # no AdGuard Home installed
+    conf.write_text(ADGUARD_YAML % 'true')
+    assert mirror.mirror_ad_blocking() == 1
+    [profile] = mirror.ctl.store['content-filtering']
+    assert profile['name'] == '[OPNsense] Ad Blocking (AdGuard Home)'
+    assert profile['categories'] == ['ADVERTISEMENT'] and profile['network_ids'] == ['lan-net']
+    assert profile['schedule'] == {'mode': 'ALWAYS'}
+    mirror.mirror_ad_blocking()                        # unchanged: no new writes
+    assert len(mirror.ctl.store['content-filtering']) == 1
+    conf.write_text(ADGUARD_YAML % 'false')            # protection paused in AdGuard
+    mirror.mirror_ad_blocking()
+    assert mirror.ctl.store['content-filtering'] == []

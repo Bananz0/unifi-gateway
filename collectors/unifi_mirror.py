@@ -111,6 +111,22 @@ class UniFiController:
         return body
 
 
+ADBLOCK_NAME = 'Ad Blocking (AdGuard Home)'
+ADGUARD_CONFIG = '/usr/local/AdGuardHome/AdGuardHome.yaml'
+
+
+def adguard_filtering_enabled(path):
+    """AdGuard Home's protection and filtering switches from its YAML
+    (both must be on for it to block); None when it isn't installed."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            text = f.read()
+    except OSError:
+        return None
+    flags = dict(re.findall(r'(?m)^\s+(protection_enabled|filtering_enabled):\s*(\w+)', text))
+    return flags.get('protection_enabled', 'true') == 'true' and         flags.get('filtering_enabled', 'true') == 'true'
+
+
 # the label OPNsense's firewall log gives its default block rule
 DEFAULT_DENY = 'Default deny / state violation rule'
 
@@ -132,6 +148,7 @@ class OPNsenseMirror:
     def __init__(self, api, controller, lan_identifiers, wan_identifiers):
         self.api = api
         self.ctl = controller
+        self.adguard_config = ADGUARD_CONFIG
         self.lan_identifiers = lan_identifiers
         self.wan_identifiers = wan_identifiers
         self.warnings = []
@@ -225,13 +242,44 @@ class OPNsenseMirror:
                           ('port_forwards', lambda: self.mirror_port_forwards(aliases)),
                           ('firewall_rules', lambda: self.mirror_firewall_rules(aliases)),
                           ('fixed_ips', self.mirror_reservations),
-                          ('routes', self.mirror_routes)):
+                          ('routes', self.mirror_routes),
+                          ('ad_blocking', self.mirror_ad_blocking)):
             try:
                 summary[label] = fn()
             except (UniFiAPIError, OPNsenseAPIError) as e:
                 self._warn('%s not mirrored: %s' % (label, e))
         summary['warnings'] = self.warnings
         return summary
+
+    def mirror_ad_blocking(self):
+        """AdGuard Home on OPNsense filters DNS for the whole network: shown in
+        UniFi as a Content Filtering profile with the Advertisement category
+        (how Network 10.6 represents a UXG's ad blocking). Read-only on the
+        AdGuard side; the profile follows AdGuard's filtering switch."""
+        enabled = adguard_filtering_enabled(self.adguard_config)
+        if enabled is None:
+            return 0                          # no AdGuard Home on this router
+        name = _name(ADBLOCK_NAME)
+        profiles = [p for p in self.ctl.call('GET', 'v2/content-filtering') or []
+                    if p.get('name') == name]
+        if not enabled:
+            for profile in profiles:
+                self.ctl.call('DELETE', 'v2/content-filtering/%s' % profile['_id'])
+                logger.info('UniFi mirror: removed %r (AdGuard filtering is off)', name)
+            return 0
+        networks = sorted(n['_id'] for n in self.ctl.call('GET', 'rest/networkconf')
+                          if n.get('purpose') in ('corporate', 'guest'))
+        desired = {'name': name, 'enabled': True, 'categories': ['ADVERTISEMENT'],
+                   'network_ids': networks, 'client_macs': [], 'allow_list': [],
+                   'block_list': [], 'safe_search': [], 'schedule': {'mode': 'ALWAYS'}}
+        if not profiles:
+            self.ctl.call('POST', 'v2/content-filtering/create', desired)
+            logger.info('UniFi mirror: added %r', name)
+        elif sorted(profiles[0].get('network_ids') or []) != networks or                 not profiles[0].get('enabled'):
+            self.ctl.call('PUT', 'v2/content-filtering/%s' % profiles[0]['_id'],
+                          dict(desired, _id=profiles[0]['_id']))
+            logger.info('UniFi mirror: updated %r', name)
+        return 1
 
     def mirror_groups(self, aliases):
         desired = {}
