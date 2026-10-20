@@ -78,19 +78,20 @@ live test adoption in a lab controller:
   `/api/s/default/stat/report/5minutes.user`, attrs including `time`, `user`,
   and `dpi`, and start/end as Unix milliseconds. These are synthetic lab
   counters, not real client traffic. UI rendering has not yet been verified.
-- **Flows remain unverified on a Cloud Key.** The device's
-  `unifi-mq-broker` pushes flows to a RabbitMQ the controller provides
-  (`messageBroker.rabbitMq` host/port/user/password/TLS); the controller
-  consumes queue `unifi_flow_queue`. Cloud Key Gen2+ has no RabbitMQ
-  installed in the observed configuration. That observation alone does not
-  prove that every UXG/Cloud Key configuration lacks flow support; earlier
-  statements claiming impossibility were too strong. Check provisioning and
-  feature negotiation before drawing that conclusion.
-  The configuration factory additionally checks the Java property
-  `unifi.rmq.enabled` and the device's `udapiSupportsMessageBroker()` result;
-  external broker provisioning expects a device certificate chain. The
-  environment service defaults its broker TLS port to 5671 (`rmq.tls_port`).
-  This is a lead for further isolated testing, not a verified flow integration.
+- **Flows work through the inform, without RabbitMQ (verified 2026-10-20 in
+  production, Cloud Key, Network 10.6.106).** The UXG processor
+  (`frjFRbSrDCaRuGKgFdo`) passes the inform's `connections` list to
+  `trafficFlowConntrackEventsProcessor` on every inform, gated only by the
+  system property `TRAFFIC_FLOWS_ENABLED` (default true). Each entry:
+  `{timestamp: "YYYY-MM-DDTHH:MM:SS.sssZ", ip: {saddr, sport, daddr, dport,
+  protocol: <IANA number>, version}, hostnames: [...], in: <udapi if>,
+  out: <udapi if>, region: {src, dst}, stats: {rxBytes, rxPackets, txBytes,
+  txPackets}}`. Flows need IPs, a protocol and (for TCP/UDP) ports. They are
+  stored as action=allowed with policy CONNTRACK in `ace_audit.traffic_flow`,
+  and the controller resolves the client MAC, the networks and the domain.
+  `POST /v2/api/site/default/traffic-flows` returns them. The RabbitMQ path
+  (`unifi-mq-broker` → `unifi_flow_queue`) is what a real UXG uses for
+  blocked/IPS events; this emulator doesn't need it.
 
 ## UXG mode (branch `feat/uxg-mode`)
 
@@ -191,9 +192,14 @@ the controller pushed).
 - **Mirror on a UXG site:** rule numbers start at 20000 (else
   `FirewallRuleIndexOutOfRange`) and skip indexes used by rules made in UniFi
   (else `FirewallRuleIndexExisted`).
-- Still open: `gw_caps` schema (`{}` placeholder), zone-based firewall
-  layout, and the production migration (forget the USG, adopt the UXGB
-  identity; the first UXG push replaces USG-era `fw-*`/`pf-*` objects).
+- **Production migrated 2026-10-20 03:29** (`tools/migrate_usg_to_uxg.py`):
+  the USG was forgotten and the same MAC re-adopted as a UXG-Max. The controller
+  remembered that MAC used AES-GCM and rejected unadopted CBC informs as a
+  downgrade, so unadopted informs now follow `use_aes_gcm`. The first push
+  applied cleanly; mirrored rules were renumbered to 20000+; DPI reports
+  continued (9 clients in the first window).
+- Still open: `gw_caps` schema (`{}` placeholder) and the zone-based
+  firewall layout.
 
 ## Next steps
 
