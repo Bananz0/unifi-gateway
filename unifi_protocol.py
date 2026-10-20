@@ -46,9 +46,9 @@ UXG_MODELS = {'UXG', 'UXGB', 'UXGPRO', 'UXGA6AA'}
 # The controller warns "Skip updating capability ... due to empty
 # udapi_version" without it; this value was accepted in the lab adoption.
 UDAPI_VERSION = {'major': 1, 'minor': 0}
-# The controller stores this verbatim as the device's gw_caps.caps; on
-# Network 10.6 it only carries IPS engine data (Suricata versions), which
-# this emulator doesn't provide, so it is empty. Sent when a noop asks for it.
+# Stored as the device's gw_caps.caps. Network 10.6 knows two flags there,
+# wan_magic and slaac_detect (UXG firmware WAN auto-detection), neither of
+# which OPNsense has, so the accurate answer is empty. Sent when a noop asks.
 GW_CAPS = {}
 # usg_caps bits (Network 10.6 device model): only what the emulator
 # implements. 1 = DPI (also implied by has_dpi), 0x20000000 = trigger logs:

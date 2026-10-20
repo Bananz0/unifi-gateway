@@ -105,7 +105,11 @@ live test adoption in a lab controller:
   rule with the same label. Result: blocked, incoming flows attributed to that
   policy, as on a real UXG.
 - **`usg_caps`** is now sent with only the implemented bits (DPI, trigger logs).
-  `gw_caps` only holds IPS engine data on 10.6 and stays empty.
+  `gw_caps.caps` only has two flags on 10.6, `wan_magic` and `slaac_detect`
+  (UXG firmware WAN auto-detection). OPNsense has neither, so it stays empty.
+  Suricata versions are separate device fields that drive the controller's
+  Suricata upgrade commands, so they aren't sent. `ips = true` is live in
+  production (usg_caps 0x20002081).
 
 - **Region Blocking** (`usg_geo.ip_filtering` in the controller) is pushed as
   UDAPI `services.geoipFiltering {enabled, action: block|allow, countryList,
