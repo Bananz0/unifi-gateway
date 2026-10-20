@@ -337,7 +337,7 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         direct = self.port_map(if_id)
         if direct:
             return direct
-        body = self._udapi_ifs.get(if_id) or {}
+        body = getattr(self, '_udapi_ifs', {}).get(if_id) or {}
         kind = (body.get('identification') or {}).get('type')
         candidates = set()
         for addr in body.get('addresses') or []:

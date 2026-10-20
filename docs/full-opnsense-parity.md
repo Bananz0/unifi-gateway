@@ -248,6 +248,28 @@ with no IP/gateway binding. Such entries cannot receive invented per-IP Internet
 accounting. A later snapshot identified two such MAC-only entries; client counts
 change as discovery updates. The UI itself was not visually verified.
 
+## Scoped firewall compiler: experimental, not deployed
+
+`opnsense_filter_program.py` compiles nested UDAPI calls and RETURN into a
+forward-only PF tag program scoped to one ingress. Compilation performs no API
+writes. It is not integrated into provisioning or deployed to production.
+Meaningful egress-dependent branches and unsupported state-specific actions
+raise errors; they must not silently fall back to a permissive approximation.
+
+Isolated OPNsense 26.7.7 package tests exercised the generated rules in the real
+PF kernel: a VLAN client passed a WAN HTTP probe, was blocked after a child
+RETURN resumed a parent DROP, and passed after that parent became ACCEPT.
+A source-conditioned child DROP blocked only the matching test address; changing
+back restored access. WAN packet capture confirmed source NAT and a separate
+client DNS query through the VLAN router returned NOERROR with answers.
+These synthetic policy tests do not establish controller UI integration,
+IPv6 parity, existing-state revocation, transactional batch recovery or complete
+egress-policy support. The lab evidence remains outside the repository.
+
+Instagram enforcement remains unverified pending a user-created rule. The
+installed Zenarmor license rejected scoped policy activation with "Upgrade to
+premium"; changing the shared Default policy is not a safe substitute.
+
 ## Later: OpenWrt AP emulation
 
 This is a separate daemon role per AP, with its own identity/adoption and radio
