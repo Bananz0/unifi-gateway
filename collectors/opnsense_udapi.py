@@ -655,6 +655,16 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         system = udapi.get('system') or {}
         own_host = str(system.get('hostname') or '').lower()
 
+        # UDAPI static leases carry no name; a UXG names the client through
+        # a DNS host record for the same address when the operator made one
+        record_names = {}
+        for rec in (services.get('dnsForwarder') or {}).get('hostRecords') or []:
+            addr = rec.get('address')
+            addr = addr.get('address') if isinstance(addr, dict) else addr
+            label = str(rec.get('hostName') or '').strip().split('.')[0]
+            if addr and re.match(r'^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$', label):
+                record_names.setdefault(str(addr), label)
+
         shared = {}
         for server in services.get('dhcpServers') or []:
             if not server.get('enabled', True) or server.get('ipVersion', 'v4') != 'v4':
@@ -674,7 +684,7 @@ class UDAPIConfigSync(OPNsenseConfigSync):
                     self._warn('DHCP static lease %r skipped: no usable MAC/address', lease)
                     continue
                 name = str(lease.get('hostname') or lease.get('name')
-                           or lease.get('description') or '')
+                           or lease.get('description') or record_names.get(addrs[0]) or '')
                 if not name or name in mappings:
                     name = 'host-' + mac.replace(':', '')
                 mappings[name] = {'mac-address': mac, 'ip-address': addrs[0]}

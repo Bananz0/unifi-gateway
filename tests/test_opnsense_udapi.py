@@ -368,6 +368,13 @@ class TestRealWanCapture:
         nas = rules['lab block nas web']
         assert nas['destination_net'].startswith('ufg_') and nas['destination_port'].startswith('ufg_')
 
+    def test_reservation_named_from_dns_record(self, wan_api, wan_sync):
+        """UDAPI static leases are nameless; the nas.lab record for the same
+        address names the reservation instead of host-<mac>."""
+        wan_sync.apply_system_cfg(copy.deepcopy(WAN_CAPTURE))
+        res = {r['hw_address']: r for r in wan_api.search(KEA_RESERVATIONS.search)}
+        assert res['aa:bb:cc:00:00:01']['hostname'] == 'nas'
+
     def test_controller_and_mirrored_entries_skipped(self, wan_api, wan_sync):
         cfg = copy.deepcopy(WAN_CAPTURE)
         nat = cfg['udapi']['firewall/nat']
