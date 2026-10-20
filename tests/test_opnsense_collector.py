@@ -324,3 +324,11 @@ class TestActions:
         collector.opts['allow_reboot'] = 'true'
         assert collector.reboot() is True
         assert ('core/system/reboot', None) in collector.api.posts
+
+    def test_speedtest_without_backend_is_not_handled(self, collector):
+        """The plugin answers this when no speedtest binary is installed."""
+        with patch.object(collector.api, 'get', return_value={
+                'version': 'none', 'message': 'No speedtest package installed'}):
+            assert collector.run_speedtest() is False
+        with patch.object(collector.api, 'get', return_value={'download': 90}):
+            assert collector.run_speedtest() is True

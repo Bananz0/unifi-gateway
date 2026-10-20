@@ -861,6 +861,10 @@ class OPNSenseCollector(FreeBSDCollector):
         except OPNsenseAPIError as e:
             logger.warning('OPNsense speedtest failed: %s', e)
             return False
+        if isinstance(result, dict) and result.get('version') == 'none':
+            # the plugin is installed but has no speedtest backend to run
+            logger.warning('OPNsense speedtest unavailable: %s', result.get('message'))
+            return False
         self._cache.pop('speedtest', None)
         logger.info('Speed test complete: %s', result)
         return True
