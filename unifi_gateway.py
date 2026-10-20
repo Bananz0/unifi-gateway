@@ -336,7 +336,7 @@ class UnifiGateway(Daemon):
         logger.info('Running speed test...')
         try:
             result = subprocess.run(
-                ['speedtest-cli', '--json'],
+                ['speedtest-cli', '--secure', '--json'],
                 capture_output=True, timeout=120,
             )
             if result.returncode == 0:

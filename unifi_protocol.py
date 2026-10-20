@@ -360,14 +360,15 @@ def _uxg_port_table(config, dc, ports, primary_lan):
         match = re.match(r'^eth(\d+)$', ifname)
         idx = int(port.get('port_idx') or (int(match.group(1)) + 1 if match else seq))
         info = ifstat.get(ifname, {})
+        status = dc.data.get('port_status', {}).get(ifname, {})
         entry = {
             'port_idx': idx,
             'name': ifname,
             'ifname': ifname,
             'mac': macs.get(ifname) or config.get('gateway', 'lan_mac'),
             'num_port': 1,
-            'enable': bool(info.get('enable', True)),
-            'up': bool(info.get('up', ifname in ifstat)),
+            'enable': bool(status.get('enable', info.get('enable', True))),
+            'up': bool(status.get('up', info.get('up', ifname in ifstat))),
             'speed': info.get('speed', 1000),
             'full_duplex': True,
             'media': 'GE',
@@ -384,8 +385,11 @@ def _uxg_port_table(config, dc, ports, primary_lan):
             'rx_bytes-r': int(info.get('rx_bps', 0)),
             'tx_bytes-r': int(info.get('tx_bps', 0)),
             'bytes-r': int(info.get('rx_bps', 0)) + int(info.get('tx_bps', 0)),
-            'rx_rate': int(info.get('rx_bps', 0)),
-            'tx_rate': int(info.get('tx_bps', 0)),
+            # UXG rx_rate/tx_rate are bits/s. Network 10.6 divides them
+            # by eight when building WAN/uplink *-r (bytes/s), overriding
+            # the supplied *-r fields. Collector rx_bps/tx_bps are B/s.
+            'rx_rate': int(info.get('rx_bps', 0)) * 8,
+            'tx_rate': int(info.get('tx_bps', 0)) * 8,
             'mac_table': [],
         }
         if port['type'].lower().startswith('wan'):
@@ -489,6 +493,8 @@ def _create_uxg_inform(config, dc, include_blocks=()):
     }
     if 'dpi_stats' in dc.data:
         payload['dpi_stats'] = _modern_dpi_stats(dc.data['dpi_stats'])
+    if dc.data.get('uptime_stats'):
+        payload['uptime_stats'] = dc.data['uptime_stats']
     # Traffic Flows: allowed connections (conntrack) and firewall blocks
     # (triggers), with UDAPI interface names
     names = {'lan': _uxg_network_name(by_name[lan_if], lan_if), 'wan': wan_if}

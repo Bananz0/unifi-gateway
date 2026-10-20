@@ -268,3 +268,29 @@ def test_ad_blocking_follows_adguard(mirror, tmp_path):
     conf.write_text(ADGUARD_YAML % 'false')            # protection paused in AdGuard
     mirror.mirror_ad_blocking()
     assert mirror.ctl.store['content-filtering'] == []
+
+
+def test_missing_created_identifier_does_not_abort_other_mirrors(mirror):
+    real = mirror.ctl.call
+
+    def call(method, path, payload=None):
+        if method == 'POST' and path == 'rest/firewallrule':
+            return [{'name': payload['name']}]  # invalid HTTP-success response
+        return real(method, path, payload)
+
+    mirror.ctl.call = call
+    result = mirror.run()
+    assert result['fixed_ips'] > 0
+    assert any('no object identifier' in w for w in result['warnings'])
+
+
+def test_http_success_with_controller_error_is_still_failure():
+    from unittest.mock import Mock
+    from collectors.unifi_mirror import UniFiController
+    ctl = UniFiController('https://example.invalid', 'user', 'password')
+    ctl._prefix = ''
+    ctl._raw = Mock(return_value=(200, {'meta': {
+        'rc': 'error', 'msg': 'api.err.UnsupportedFeature'}, 'data': []}))
+    import pytest
+    with pytest.raises(UniFiAPIError, match='api.err.UnsupportedFeature'):
+        ctl.call('POST', 'rest/firewallrule', {})

@@ -26,7 +26,7 @@ import os
 import threading
 import time
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 from . import base
 from .freebsd import FreeBSDCollector
@@ -37,6 +37,7 @@ from .zenarmor import ZenarmorDPI
 from .opnsense_fwlog import FirewallLogTriggers
 from .netflow import NetflowTotals
 from .opnsense_ports import discover_ports
+from .opnsense_quality import WanQuality
 from .unifi_mirror import OPNsenseMirror, UniFiController
 
 logger = logging.getLogger('unifi-gateway')
@@ -102,6 +103,7 @@ class OPNSenseCollector(FreeBSDCollector):
         self._cache = {}
         self._api_errors = {}
         self._prev_counters = {}
+        self._wan_quality = WanQuality()
         self._host_traffic = {}
         self._host_seen = {}
         self._traffic_lock = threading.Lock()
@@ -355,6 +357,16 @@ class OPNSenseCollector(FreeBSDCollector):
             except OPNsenseAPIError as e:
                 logger.warning('Failed to refresh blocked client addresses: %s', e)
         self.data['ddns'] = self._get_ddns()
+        overview = self._overview()
+        self.data['port_status'] = {
+            p['ifname']: {'enable': overview[p['realif']].get('enabled', True),
+                          'up': overview[p['realif']].get('status') in ('up', 'active', 'associated')}
+            for p in self.ports if p['realif'] in overview}
+        quality = self._get_wan_quality()
+        if quality:
+            self.data['uptime_stats'] = quality
+        else:
+            self.data.pop('uptime_stats', None)
         wan = self._wan_port()
         if wan:
             row = self._overview().get(wan['realif'])
@@ -505,6 +517,34 @@ class OPNSenseCollector(FreeBSDCollector):
                 pass
         return super()._get_latency()
 
+    def _get_wan_quality(self):
+        gateways = self._call('quality_gateways',
+            lambda: self.api.search('routing/settings/search_gateway'),
+            ttl=60, max_stale=120) or []
+        items = self._call('gateway_status',
+            lambda: self.api.get('routes/gateway/status').get('items', []),
+            ttl=10, max_stale=20) or []
+        by_name = {row.get('name'): row for row in items}
+        result = {}
+        for port in self.ports:
+            role = port['type'].lower()
+            if role not in ('wan', 'wan2'):
+                continue
+            ident = self.port_identifier(port['ifname'])
+            candidates = [g for g in gateways if g.get('interface') == ident
+                and str(g.get('disabled', False)).lower() not in ('true', '1')
+                and str(g.get('monitor_disable', '0')).lower() not in ('true', '1')]
+            candidates.sort(key=lambda g: (g.get('ipprotocol') != 'inet',
+                                           not g.get('defaultgw'), not g.get('upstream')))
+            group = 'WAN' if role == 'wan' else 'WAN2'
+            if candidates:
+                sample = self._wan_quality.sample(group,
+                    by_name.get(candidates[0].get('name'), {}))
+                if sample:
+                    result[group] = sample
+        self._wan_quality.retain(result)
+        return result
+
     def _get_nameservers(self):
         if not self.local:
             servers = self._call(
@@ -550,11 +590,16 @@ class OPNSenseCollector(FreeBSDCollector):
             'speedtest', lambda: self.api.get('speedtest/service/showrecent'), ttl=300)
         if isinstance(recent, dict) and recent.get('date'):
             try:
-                lastrun = int(time.mktime(
-                    datetime.strptime(recent['date'][:19], '%Y-%m-%dT%H:%M:%S').timetuple()))
+                # The community plugin's CSV roundtrip preserves the CLI's
+                # original UTC wall time but drops its Z suffix. Interpreting
+                # it in the daemon's local zone shifts results by three hours
+                # on an EAT router. Respect explicit offsets when supplied.
+                stamp = datetime.fromisoformat(str(recent['date']).replace('Z', '+00:00'))
+                lastrun = int((stamp if stamp.tzinfo else
+                               stamp.replace(tzinfo=timezone.utc)).timestamp())
                 result = {
                     'lastrun': lastrun,
-                    'ping': float(recent.get('latency', 0)),
+                    'ping': base.speedtest_ping(recent.get('latency', 0)),
                     'download': float(recent.get('download', 0)),
                     'upload': float(recent.get('upload', 0)),
                 }

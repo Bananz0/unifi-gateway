@@ -8,6 +8,7 @@ import ast
 import csv
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -22,6 +23,21 @@ except ImportError:  # optional: OPNsense does not ship it
 from tools import boot_time
 
 logger = logging.getLogger('unifi-gateway')
+
+
+def speedtest_ping(value):
+    """Milliseconds, excluding speedtest-cli's failed-probe sentinel.
+
+    Each failed HTTP latency probe contributes 3600 seconds to its sum;
+    division by six then conversion to ms contributes 600000 ms. That
+    value is not a measured RTT. Zero denotes unavailable to the inform
+    builder, which leaves status_ping incomplete.
+    """
+    try:
+        ping = float(value)
+        return ping if math.isfinite(ping) and 0 <= ping < 600000 else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 class BaseCollector:
@@ -422,7 +438,7 @@ class BaseCollector:
                 sp = json.load(f)
             return {
                 'lastrun': int(ts),
-                'ping': sp.get('ping', 0),
+                'ping': speedtest_ping(sp.get('ping', 0)),
                 'upload': sp.get('upload', 0) / 1000000,
                 'download': sp.get('download', 0) / 1000000,
             }

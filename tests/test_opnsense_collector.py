@@ -158,6 +158,43 @@ def test_new_speedtest_result_is_not_hidden_by_old_plugin_history(collector):
         assert collector._get_speedtest_results() == fallback
 
 
+def test_plugin_failed_ping_does_not_hide_measured_throughput(collector):
+    collector._cache.pop('speedtest', None)
+    collector.api.responses['speedtest/service/showrecent'] = {
+        'date': '2026-10-20T12:34:00', 'download': '21.03',
+        'upload': '17.46', 'latency': '1800000.0'}
+    with patch('collectors.base.BaseCollector._get_speedtest_results',
+               return_value={'lastrun': 0}):
+        report = collector._get_speedtest_results()
+    assert report['ping'] == 0
+    assert report['download'] == 21.03
+    assert report['upload'] == 17.46
+
+
+@pytest.mark.parametrize('stamp', ['2026-10-20T09:33:30', '2026-10-20T09:33:30Z',
+                                  '2026-10-20T12:33:30+03:00'])
+def test_plugin_result_time_is_utc_and_respects_explicit_offset(collector, stamp):
+    collector._cache.pop('speedtest', None)
+    collector.api.responses['speedtest/service/showrecent'] = {
+        'date': stamp, 'download': '21.03', 'upload': '17.46', 'latency': '172'}
+    with patch('collectors.base.BaseCollector._get_speedtest_results',
+               return_value={'lastrun': 0}):
+        assert collector._get_speedtest_results()['lastrun'] == 1792488810
+
+
+def test_quality_uses_actual_gateway_monitor_and_expires_failed_reads(collector):
+    collector._cache.clear()
+    collector.api.responses['routes/gateway/status'] = {'items': [{
+        'name': 'WAN_GWv4', 'monitor': '1.1.1.1', 'loss': '3.0 %', 'delay': '20 ms'}]}
+    report = collector._get_wan_quality()
+    assert report['WAN']['alerting_monitors'][0]['availability'] == 97
+    assert report['WAN']['alerting_monitors'][0]['latency_average'] == 20
+    collector._cache['gateway_status'] = (time.time() - 30,
+        collector._cache['gateway_status'][1])
+    collector.api.responses['routes/gateway/status'] = OPNsenseAPIError('unavailable')
+    assert collector._get_wan_quality() == {}
+
+
 def test_failed_arp_read_cannot_keep_old_clients_fresh(collector):
     collector._cache['arp'] = (time.time() - 90, ['stale'])
     def fail():

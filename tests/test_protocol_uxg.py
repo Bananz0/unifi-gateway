@@ -88,6 +88,14 @@ def test_secondary_wan_without_ip_still_reports_real_port_and_down_state():
     assert port['mac'] == '00:11:22:33:44:55'
 
 
+def test_disabled_port_without_traffic_counters_uses_observed_admin_state():
+    dc = DC(port_status={'eth4': {'up': False, 'enable': False}})
+    dc.data['ifstat'].pop('eth4')
+    wan = next(p for p in inform(dc=dc)['port_table'] if p['port_idx'] == 5)
+    assert wan['enable'] is False
+    assert wan['up'] is False
+
+
 class TestSelection:
 
     @pytest.mark.parametrize('device,expected', [
@@ -220,3 +228,14 @@ def test_port_throughput_rates():
     dc.data['ifstat']['eth4'] = st
     wan = {p['ifname']: p for p in inform(dc=dc)['port_table']}['eth4']
     assert (wan['rx_bytes-r'], wan['tx_bytes-r'], wan['bytes-r']) == (5000, 700, 5700)
+    assert (wan['rx_rate'], wan['tx_rate']) == (40000, 5600)
+    # Verified Network 10.6 WAN conversion: rate / 8 -> bytes/s.
+    assert wan['rx_rate'] // 8 == wan['rx_bytes-r']
+    assert wan['tx_rate'] // 8 == wan['tx_bytes-r']
+
+
+def test_quality_report_is_only_included_when_observed():
+    observed = {'WAN': {'alerting_monitors': [{'type': 'icmp', 'target': '1.1.1.1',
+        'availability': 99, 'latency_average': 20}], 'uptime': 10}}
+    assert inform(dc=DC(uptime_stats=observed))['uptime_stats'] == observed
+    assert 'uptime_stats' not in inform()

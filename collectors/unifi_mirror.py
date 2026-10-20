@@ -106,6 +106,10 @@ class UniFiController:
         if status not in (200, 201, 204):
             raise UniFiAPIError('%s %s: HTTP %s %s' % (method, path, status,
                                                       json.dumps(body)[:300]))
+        if (isinstance(body, dict) and isinstance(body.get('meta'), dict)
+                and body['meta'].get('rc') == 'error'):
+            raise UniFiAPIError('%s %s: %s' % (method, path,
+                body['meta'].get('msg', 'controller rejected operation')))
         if isinstance(body, dict) and 'data' in body:
             return body['data']
         return body
@@ -172,10 +176,15 @@ class OPNsenseMirror:
             try:
                 if current is None:
                     created = self.ctl.call('POST', 'rest/' + path, obj)
-                    ids[name] = created[0]['_id'] if created else None
+                    if (not isinstance(created, list) or not created
+                            or not isinstance(created[0], dict) or not created[0].get('_id')):
+                        raise UniFiAPIError('controller returned no object identifier')
+                    ids[name] = created[0]['_id']
                     changes += 1
                     logger.info('UniFi mirror: added %s %r', label, name)
                 else:
+                    if not current.get('_id'):
+                        raise UniFiAPIError('existing object has no identifier')
                     ids[name] = current['_id']
                     if any(_cmp(current.get(k)) != _cmp(obj.get(k)) for k in compare_keys):
                         self.ctl.call('PUT', 'rest/%s/%s' % (path, current['_id']), obj)
@@ -185,6 +194,8 @@ class OPNsenseMirror:
                 self._warn('%s %r rejected by the controller: %s' % (label, name, _short(e)))
         for name, obj in existing.items():
             try:
+                if not obj.get('_id'):
+                    raise UniFiAPIError('existing object has no identifier')
                 self.ctl.call('DELETE', 'rest/%s/%s' % (path, obj['_id']))
                 changes += 1
                 logger.info('UniFi mirror: removed %s %r', label, name)

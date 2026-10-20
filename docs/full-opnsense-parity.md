@@ -8,7 +8,7 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 
 | Area | Current implementation / gap | Required completion evidence |
 |---|---|---|
-| Physical ports | Discovery added in this branch, preserving existing mappings; UXGB capacity is five. VLANs, bridges, radios and tunnels are separate resources. | All Ethernet NICs, including disabled ones, represented once; real link state; stable mappings after restart. Controller model capacity is respected. |
+| Physical ports | Discovery deployed, preserving existing mappings; the missing disabled WAN2 is reported on port 4. UXGB capacity is five. VLANs, bridges, radios and tunnels are separate resources. | More NIC/driver/model combinations and restart coverage remain to be validated. |
 | Interfaces / VLAN IDs | Address/counter telemetry exists; VLAN creation, parent assignment, tagging, bridge membership and interface writes are missing. | Create/edit/remove tagged network in lab, verify packet tags, DHCP and isolation; protect management access. |
 | IPv4 | Selected firewall, DNAT, DNS records, reservations and routes translate. Full address, gateway, DHCP-client, MTU/MSS and policy routing configuration is missing. | Compare actual interface/routing/filter state with the requested values; connectivity and rollback tests. |
 | IPv6 | Selected rule/route handling exists, not a complete IPv6 stack translator. | Static/SLAAC/DHCPv6 WAN, prefix delegation, LAN prefixes, router advertisements, DHCPv6 and DNS, ICMPv6, firewall and routes tested with real clients. |
@@ -25,6 +25,7 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 | Firewall / NAT | Substantial UDAPI translator exists, with skipped-match protection. Not every policy type is supported. | Both address families, local/forward direction, sets, states, zones, hairpin/SNAT and policy restrictions; packet-level permit/deny tests. |
 | DNS / mDNS / services | Host records exist; full resolver/forwarder/mDNS/NTP/LLDP configuration is incomplete. | Service-specific writes, reloads and observed behavior; preserve current AdGuard/Unbound/Dnsmasq chain. |
 | Insights / Flows | DPI, country accounting, Netflow totals, allowed connections and firewall triggers exist in the baseline. | Counter reconciliation, attribution, restarts, retention, interface mapping and UI/API validation. |
+| Internet Quality | dpinger latency/loss now populate `uptime_stats`; WAN Insights overview and latency history confirmed on production Network 10.6. | Outage/recovery packet-level exercise and additional WANs; duration starts with actual collector observations. No historical backfill. |
 | IDS/IPS / region / ad blocking | Implemented with limits; Suricata interface changes are constrained around inline/netmap conflicts. | Verify requested enforcement, not only enabled rulesets or mirrored configuration. |
 
 Each translator needs captured controller schema, version-specific OPNsense API
@@ -47,6 +48,51 @@ GET requests and proposes mappings without writing configuration.
 No checkbox is complete merely because an equivalent OPNsense service exists.
 Some controls need a small local OPNsense extension when REST does not expose
 the required operation. No direct config.xml edits should bypass validation.
+
+## Throughput and quality verification, 2026-10-20
+
+The internal collector's `rx_bps`/`tx_bps` names mean bytes/second. UXG wire
+`rx_rate`/`tx_rate` mean bits/second, whereas `rx_bytes-r`/`tx_bytes-r`
+mean bytes/second. Network 10.6 divides the rate fields by eight when updating
+WAN statistics. Sending identical values in both fields underreported WAN
+throughput eightfold. The adapter now multiplies only the bit-rate fields by
+eight; counters and directions are unchanged. Live controller readback confirmed
+`wan1.rx_rate / 8 == wan1["rx_bytes-r"]` with the corrected actual byte rate.
+
+Internet Quality requires `uptime_stats.WAN.alerting_monitors` rather than just
+the uplink's legacy `latency`. The adapter reads the configured gateway monitor,
+reports `latency_average` in milliseconds and `availability` as the integer
+percentage 100 minus dpinger loss, and includes the same target in `monitors`.
+Missing measurements, disabled monitoring, invalid targets and stale API reads
+are omitted. Continuous up/down durations are based on observations only and
+reset across missing data, long gaps or monitor changes.
+
+Production `/v2/api/site/default/wan/WAN/insights/overview` returned actual
+latency, availability and monitor readings after deployment. The corresponding
+`insights/history?period=HOUR` contained new average/max latency samples; older
+periods still had timestamps without quality values. This verifies ingestion
+and the UI's data source; it is not a visual browser validation.
+
+The rollout also exposed a controller-mirroring error: firewall-rule POST
+responses lacked object identifiers. These are now isolated and reported as
+rejections, so they cannot abort reservation/route/profile mirroring. Full
+firewall API compatibility remains incomplete and is not counted as fixed by
+making those errors visible.
+
+A production controller-triggered speedtest completed at 21.03 Mbps down and
+17.46 Mbps up. The installed speedtest-cli 2.1.3 reported 1800000 ms latency:
+its source inserts 3600 seconds per failed HTTP latency probe, so three failed
+probes produce `(3600 * 3 / 6) * 1000`, not an RTT measurement. The adapter
+rejects these sentinel-contaminated latency values while retaining measured
+throughput; `status_ping` remains incomplete. Native CLI fallback uses HTTPS
+with `--secure`. The OPNsense plugin's server-selection/probing behavior is
+separate and is not claimed repaired by this validation.
+
+The plugin's `showrecent` date preserves the runner's UTC wall-clock text but
+drops its timezone suffix. The old adapter interpreted that text as local time,
+shifting the UniFi result three hours on the EAT router. It now treats a naive
+plugin date as UTC and honors explicit timezone offsets. This corrects the
+UniFi timestamp; the third-party plugin's own CSV storage is not rewritten.
 
 ## Later: OpenWrt AP emulation
 
