@@ -56,7 +56,7 @@ GW_CAPS = {}
 # ad blocking (0x40000000) and schedules (32) stay off,
 # so the controller doesn't offer settings the translator can't apply.
 USG_CAPS = 0x1 | 0x20000000
-# Region Blocking, offered only when OPNsense has a GeoIP database to apply it
+# Region Blocking (GeoIP alias, or per-country URL Table aliases without one)
 GEOIP_CAP = 0x40
 # Threat Management (IDS/IPS + signature categories), applied to OPNsense
 # Suricata when the operator opts in with [opnsense] ips = true

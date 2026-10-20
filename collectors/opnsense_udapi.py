@@ -118,6 +118,11 @@ def _mirrored(rule):
     return is_mirrored(forward.group(1) if forward else description)
 
 
+# per-country aggregated CIDR lists, used when OPNsense has no MaxMind
+# GeoIP database configured
+COUNTRY_LIST_URL = 'https://www.ipdeny.com/ipblocks/data/aggregated/%s-aggregated.zone'
+
+
 def trigger_tags(cfg):
     """{(chain, rule id): {id, type}}: the UniFi policy behind each UDAPI
     rule, which OPNsense rule keys (ufw-<chain>-<id>-<if>) carry back."""
@@ -535,6 +540,13 @@ class UDAPIConfigSync(OPNsenseConfigSync):
                     del rules[k]
         return rules, aliases, failed
 
+    def _geoip_source(self):
+        try:
+            geo = (self.api.get('firewall/alias/get_geo_i_p').get('alias') or {}).get('geoip') or {}
+        except (OPNsenseAPIError, AttributeError):
+            return False
+        return bool(geo.get('url'))
+
     def _translate_geoip(self, geo, rules, aliases):
         """Region blocking (services.geoipFiltering) -> a GeoIP alias and
         quick rules on each listed WAN, ahead of the user rules. "block"
@@ -548,16 +560,22 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         if not countries or action not in ('block', 'allow') or                 direction not in ('both', 'ingress', 'egress'):
             self._warn('region blocking skipped: unsupported settings %r', geo)
             return
-        try:
-            source = (self.api.get('firewall/alias/get_geo_i_p').get('alias') or {}).get('geoip') or {}
-        except (OPNsenseAPIError, AttributeError):
-            source = {}
-        if not source.get('url'):
-            self._warn('region blocking: OPNsense has no GeoIP source configured '
-                       '(Firewall > Aliases > GeoIP settings); the country list stays empty')
         name = 'ufg_geoip'
-        aliases[name] = self._alias_payload(
-            name, 'geoip', countries, 'UniFi region blocking')
+        if self._geoip_source():
+            aliases[name] = self._alias_payload(
+                name, 'geoip', countries, 'UniFi region blocking')
+        else:
+            # no MaxMind database: per-country lists OPNsense downloads and
+            # refreshes itself (URL Table aliases), nested in one alias
+            members = []
+            for code in countries:
+                member = 'ufg_geo_%s' % code.lower()
+                aliases[member] = dict(self._alias_payload(
+                    member, 'urltable', [COUNTRY_LIST_URL % code.lower()],
+                    'UniFi region blocking %s' % code), updatefreq='1')
+                members.append(member)
+            aliases[name] = self._alias_payload(
+                name, 'network', members, 'UniFi region blocking')
         negate = '1' if action == 'allow' else '0'
         for iface in geo.get('interfaces') or [{'id': 'eth4'}]:
             opn_if = self.resolve_interface(_ref_id(iface))

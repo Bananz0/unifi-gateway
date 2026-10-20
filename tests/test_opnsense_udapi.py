@@ -429,9 +429,14 @@ class TestRegionBlocking:
         assert set(rules) == {'unifi-gw:ugeo-in-wan'}
         assert rules['unifi-gw:ugeo-in-wan']['source_not'] == '1'
 
-    def test_warns_without_geoip_database(self, wan_api, wan_sync):
-        summary, _, _ = self.apply(wan_api, wan_sync, geoip_url='')
-        assert any('no GeoIP source' in w for w in summary['warnings'])
+    def test_without_geoip_database_uses_country_lists(self, wan_api, wan_sync):
+        summary, rules, aliases = self.apply(wan_api, wan_sync, geoip_url='')
+        assert not summary['warnings']
+        cn = aliases['ufg_geo_cn']
+        assert cn['type'] == 'urltable' and cn['content'].endswith('/cn-aggregated.zone')
+        assert aliases['ufg_geoip']['type'] == 'network'
+        assert set(re.split(r'[,\n]', aliases['ufg_geoip']['content'])) == {'ufg_geo_cn', 'ufg_geo_ru'}
+        assert rules['unifi-gw:ugeo-in-wan']['source_net'] == 'ufg_geoip'
 
     def test_disabled_removes_rules(self, wan_api, wan_sync):
         self.apply(wan_api, wan_sync)
