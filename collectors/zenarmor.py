@@ -329,9 +329,12 @@ def _connection(row, inbound, country):
         out_bytes, in_bytes, out_pkts, in_pkts = in_bytes, out_bytes, in_pkts, out_pkts
     try:
         version = ipaddress.ip_address(src).version
-        ipaddress.ip_address(dst)
+        remote = ipaddress.ip_address(dst)
     except (TypeError, ValueError):
         return None
+    # traffic between local hosts (including to the gateway) never leaves
+    # through the WAN
+    local = not remote.is_global
     protocol = IP_PROTOCOLS.get(str(row['transport_proto'] or '').lower())
     if protocol is None:
         return None
@@ -347,12 +350,13 @@ def _connection(row, inbound, country):
                   'txBytes': max(0, int(out_bytes or 0)), 'txPackets': max(0, int(out_pkts or 0))},
         # the remote end is reached through the WAN; the protocol layer swaps
         # these placeholders for the gateway's UDAPI interface names
-        'in': 'wan' if inbound else 'lan',
-        'out': 'lan' if inbound else 'wan',
+        'in': 'wan' if inbound and not local else 'lan',
+        'out': 'lan' if inbound or local else 'wan',
     }
     host = str(row['dst_hostname'] or '') if 'dst_hostname' in keys and not inbound else ''
     if host and host != dst:
         flow['hostnames'] = [host]
-    if country:
+    if country and not local:
         flow['country'] = country
+        flow['region'] = {'dst': country}   # where the controller reads it from
     return {k: v for k, v in flow.items() if v is not None}

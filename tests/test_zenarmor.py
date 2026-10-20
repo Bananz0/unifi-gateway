@@ -209,18 +209,20 @@ class TestFlows:
             'ip': {'saddr': '10.0.5.20', 'daddr': '142.250.1.1', 'protocol': 6,
                    'version': 'v4', 'sport': 50000, 'dport': 443},
             'stats': {'rxBytes': 5000, 'rxPackets': 7, 'txBytes': 100, 'txPackets': 3},
-            'in': 'lan', 'out': 'wan', 'hostnames': ['www.youtube.com'], 'country': 'US'}
+            'in': 'lan', 'out': 'wan', 'hostnames': ['www.youtube.com'], 'country': 'US',
+            'region': {'dst': 'US'}}
 
     def test_inbound_connection_has_client_as_source(self, tmp_path):
         [flow] = self.poll(tmp_path, {
             'direction': 'in', 'dst_hwaddr': 'd494a9f4e124', 'src_hwaddr': '802aa8987651',
-            'ip_src_saddr': '198.51.100.7', 'ip_src_port': 40000,
+            'ip_src_port': 40000,
             'ip_dst_saddr': '10.0.5.20', 'ip_dst_port': 32400,
-            'src_country_name': 'Kenya', 'dst_hostname': '10.0.5.20'}).take_connections()
+            'src_country_name': 'Kenya', 'dst_hostname': '10.0.5.20',
+            'ip_src_saddr': '41.90.1.7'}).take_connections()
         assert flow['ip']['saddr'] == '10.0.5.20' and flow['ip']['sport'] == 32400
-        assert flow['ip']['daddr'] == '198.51.100.7' and flow['ip']['dport'] == 40000
+        assert flow['ip']['daddr'] == '41.90.1.7' and flow['ip']['dport'] == 40000
         assert flow['stats']['txBytes'] == 5000 and flow['stats']['rxBytes'] == 100
-        assert (flow['in'], flow['out'], flow['country']) == ('wan', 'lan', 'KE')
+        assert (flow['in'], flow['out'], flow['region']) == ('wan', 'lan', {'dst': 'KE'})
         assert 'hostnames' not in flow
 
     def test_blocked_unknown_protocol_and_disabled_are_skipped(self, tmp_path):
@@ -232,3 +234,10 @@ class TestFlows:
         off = tmp_path / 'off'
         off.mkdir()
         assert self.poll(off, {}, flows=False).take_connections() == []
+
+
+    def test_local_traffic_stays_on_the_lan(self, tmp_path):
+        [flow] = self.poll(tmp_path, {'ip_dst_saddr': '10.0.5.1', 'ip_dst_port': 53,
+                                      'transport_proto': 'UDP'}).take_connections()
+        assert (flow['in'], flow['out']) == ('lan', 'lan')
+        assert 'country' not in flow and 'region' not in flow
