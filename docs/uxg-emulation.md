@@ -150,30 +150,46 @@ Set `device = UXGB` (or `UXG`, `UXGPRO`, `UXGA6AA`) in `[gateway]`, with
   `tests/fixtures/uxg_system_cfg_synthetic.json`), `tests/test_protocol_uxg.py`,
   and additions to the gateway/collector tests.
 
-### Needs a live lab test
+### Lab results (2026-10-20, Network 10.6.106)
 
-1. **UDAPI shape of user objects.** Create in the lab controller, then diff
-   the captured `system_cfg` against the synthetic fixture: a LAN_IN and a
-   WAN_LOCAL rule (with a port group, an address group, a MAC, a schedule, a
-   state match), a port forward with source restriction, a static route
-   (next-hop, blackhole, interface), a DHCP reservation with a name, a DNS
-   record. Check rule ids, `states`, `protocol`, `translation`,
-   `routes/static` field names and the description prefix. With Network 10's
-   zone-based firewall enabled the chain layout may differ entirely; unbound
-   chains only produce warnings.
-2. **Inform acceptance.** Run the daemon (not the probe) with `device = UXGB`
-   against the lab controller: clients appear from `port_table`/leases,
-   ports/WAN render, no controller-side parse errors for `uplink` (sent as the
-   USG-style string), `network_table` names, `vlan`, `gw_caps: {}`.
-3. **gw_caps schema** from the UXGB firmware (`mcad`); `{}` is a placeholder.
-4. **include_blocks semantics**: whether the controller expects the block
-   only once or keeps asking, and whether other blocks get requested.
-5. **blocked_sta string format** with a blocked client (separator).
-6. **OPNsense validation** of the generated objects on a real 26.x box
-   (inet46 rules with aliases, MAC aliases in rules, the `(self)` destination).
-7. **Migration**: confirm the first UXG push replaces USG-era rules as
-   intended, and that the OPNsense→UniFi mirror (`unifi_mirror.py`) still
-   works against a UXG site.
+The daemon ran with `device = UXGB` against a lab controller, reading the live
+OPNsense and logging every OPNsense write instead of sending it
+(`tests/fixtures/uxg_setparam_10.6.106_objects.json` is the redacted config
+the controller pushed).
+
+- **Inform accepted.** 27-29 real clients from `port_table`/leases; WAN, WWW
+  and LAN health ok; latency, speed-test and CPU/memory shown. The configured
+  `lan_mac` must be the payload MAC: the controller answers HTTP 400
+  "mac inconsistent in header and payload" otherwise. Ports use front-panel
+  numbering (eth0-3 = ports 1-4, eth4 = port 5); with config-order numbering
+  the WAN landed on port 1 and the WAN chains never rendered.
+- **UDAPI user objects, as really sent:** rule ids from 20000;
+  `connectionState` (singular), `icmpType`/`icmpv6Type`; port forwards are
+  flat `firewall/nat` entries with their own `chain` (`PREROUTING` DNAT,
+  `POSTROUTING` hairpin MASQUERADE named `PortForward MASQUERADE [name]`), the
+  WAN given as the virtual set `ADDRv4_eth4` in `destination.sets`.
+  `ADDRv4_<if>`/`NETv4_<if>` are never declared in `firewall/sets`; they map
+  to OPNsense `<if>ip` / `<if>`. WAN chains exist only once a WAN network is
+  assigned to eth4. Static leases carry no name: the reservation is named
+  from a DNS record for the same address, else `host-<mac>`.
+- **Translator:** zero warnings on the real config: LAN_IN/LAN_LOCAL block
+  rules, WAN_LOCAL ICMP rule, both port forwards (with source restriction
+  and port range), DNS records, static route and reservation. Mirrored
+  `[OPNsense]` objects, controller built-ins and hairpin NAT are skipped.
+- **Blocking:** `block-sta`/`unblock-sta` update the `ufg_blocked` alias and
+  kill the client's states; the controller also pushes the blocked set in
+  `system_cfg`, which becomes the `ufg_blocked_clients_*` alias and rules.
+  `kick-sta` for a wired client answers `api.err.UnknownStation` on the
+  controller itself (kicking is an AP function).
+- **Speed test:** dispatched; OPNsense's plugin answering `version: none`
+  (no backend installed) is now reported as unhandled so the gateway falls
+  back to its own test.
+- **Mirror on a UXG site:** rule numbers start at 20000 (else
+  `FirewallRuleIndexOutOfRange`) and skip indexes used by rules made in UniFi
+  (else `FirewallRuleIndexExisted`).
+- Still open: `gw_caps` schema (`{}` placeholder), zone-based firewall
+  layout, and the production migration (forget the USG, adopt the UXGB
+  identity; the first UXG push replaces USG-era `fw-*`/`pf-*` objects).
 
 ## Next steps
 
