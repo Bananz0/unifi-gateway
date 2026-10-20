@@ -52,6 +52,8 @@ DEFAULTS = {
     'apply_dhcp': 'true',
     'apply_dns': 'true',
     'apply_routes': 'true',
+    'apply_ids': 'true',
+    'ips': 'false',
     'block_clients': 'true',
     'allow_reboot': 'false',
     'traffic_interval': '30',
@@ -134,7 +136,7 @@ class OPNSenseCollector(FreeBSDCollector):
         if self.api:
             options = {k: self._bool(k) for k in (
                 'apply_firewall', 'apply_port_forward', 'apply_dhcp',
-                'apply_dns', 'apply_routes')}
+                'apply_dns', 'apply_routes', 'apply_ids')}
             self.sync = OPNsenseConfigSync(
                 self.api, self.port_identifier, self.lan_identifiers,
                 options=options)
@@ -367,6 +369,9 @@ class OPNSenseCollector(FreeBSDCollector):
         if self.fwlog:
             self.data['triggers'] = self.fwlog.take()
         self.data['geoip_ready'] = self._geoip_ready()
+        # Threat Management is offered only on request: it adds interfaces
+        # and rulesets to the operator's Suricata
+        self.data['ids_available'] = bool(self.api) and self._bool('ips')
         if not self.local:
             uptime = self._get_uptime()
             if uptime:

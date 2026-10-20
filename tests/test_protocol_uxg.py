@@ -182,6 +182,8 @@ def test_capabilities_advertise_only_implemented_features():
         assert not caps & unsupported
     # region blocking only once OPNsense has a GeoIP database
     assert inform(dc=DC(geoip_ready=True))['usg_caps'] & 64
+    # threat management only when the operator opts in
+    assert inform(dc=DC(ids_available=True))['usg_caps'] & 0x2080 == 0x2080
 
 
 def test_triggers_use_udapi_interface_names():

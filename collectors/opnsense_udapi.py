@@ -29,6 +29,7 @@ import logging
 import re
 
 from .opnsense_api import OPNsenseAPIError
+from .opnsense_ids import apply_ids
 from .opnsense_sync import (
     ALIAS_PREFIX, ALIASES, BLOCK_RULE_KEY, BLOCKED_IP_ALIAS, BLOCKED_MAC_ALIAS, DNAT_RULES,
     FILTER_RULES, OPNsenseConfigSync, _as_list, alias_name, is_mirrored,
@@ -261,6 +262,13 @@ class UDAPIConfigSync(OPNsenseConfigSync):
                 summary[name] = fn(legacy)
             except (OPNsenseAPIError, ValueError) as e:
                 self._warn('%s not applied: %s', name, e)
+
+        if self._enabled('apply_ids') and 'idsIps' in services:
+            try:
+                summary['ids_rulesets'] = apply_ids(
+                    self.api, services['idsIps'], self.resolve_interface, self._warn)
+            except OPNsenseAPIError as e:
+                self._warn('threat management not applied: %s', e)
 
         summary['warnings'] = list(self.warnings)
         return summary

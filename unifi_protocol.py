@@ -58,6 +58,9 @@ GW_CAPS = {}
 USG_CAPS = 0x1 | 0x20000000
 # Region Blocking, offered only when OPNsense has a GeoIP database to apply it
 GEOIP_CAP = 0x40
+# Threat Management (IDS/IPS + signature categories), applied to OPNsense
+# Suricata when the operator opts in with [opnsense] ips = true
+IPS_CAPS = 0x80 | 0x2000
 AES_BLOCK_SIZE = 16
 
 
@@ -474,7 +477,8 @@ def _create_uxg_inform(config, dc, include_blocks=()):
             'uptime': str(device_uptime),
         },
         'has_dpi': 'dpi_stats' in dc.data,
-        'usg_caps': USG_CAPS | (GEOIP_CAP if dc.data.get('geoip_ready') else 0),
+        'usg_caps': (USG_CAPS | (GEOIP_CAP if dc.data.get('geoip_ready') else 0)
+                     | (IPS_CAPS if dc.data.get('ids_available') else 0)),
     }
     if 'dpi_stats' in dc.data:
         payload['dpi_stats'] = _modern_dpi_stats(dc.data['dpi_stats'])
