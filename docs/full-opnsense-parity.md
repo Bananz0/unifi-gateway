@@ -12,8 +12,8 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 | Interfaces / VLAN IDs | Address/counter telemetry exists; VLAN creation, parent assignment, tagging, bridge membership and interface writes are missing. | Create/edit/remove tagged network in lab, verify packet tags, DHCP and isolation; protect management access. |
 | IPv4 | Selected firewall, DNAT, DNS records, reservations and routes translate. Full address, gateway, DHCP-client, MTU/MSS and policy routing configuration is missing. | Compare actual interface/routing/filter state with the requested values; connectivity and rollback tests. |
 | IPv6 | Selected rule/route handling exists, not a complete IPv6 stack translator. | Static/SLAAC/DHCPv6 WAN, prefix delegation, LAN prefixes, router advertisements, DHCPv6 and DNS, ICMPv6, firewall and routes tested with real clients. |
-| DHCP server | Dnsmasq/Kea reservations; pools/options/server configuration not translated. Keep Dnsmasq as the requested production backend. | Pools, lease duration, exclusions, DNS/router/domain, NTP, PXE/TFTP, custom options and reservations, as supported by the actual UniFi schema; verify client leases/options. |
-| DHCP relay | Missing. | DHCRelay destinations/interfaces/options, DHCPv4 and DHCPv6 captures. Server/relay roles must be reconciled per interface/subnet; do not accidentally run competing responders. |
+| DHCP server | Dnsmasq IPv4 pools, lease duration, subnet mask, domain, router/DNS options and scoped cleanup implemented; real OPNsense API lifecycle tested, alongside existing reservations. Unmanaged pool/option conflicts are rejected. Production deployment and real-client validation pending. | Exclusions, NTP, PXE/TFTP, custom options and IPv6 as supported by the actual UniFi schema; verify client leases/options. Keep Dnsmasq as the production backend. |
+| DHCP relay | DHCRelay destinations and relay lifecycle implemented in source, including IPv4/IPv6 address-family validation. Self-relay declarations are ignored; unmanaged relays and competing local pools are protected. | Real API and DHCPv4/DHCPv6 packet tests; relay-agent options and role transitions remain incomplete. |
 | VPN | Missing translation for tunnel configuration and status. Existing OPNsense OpenVPN configuration is independent. | WireGuard first, then OpenVPN/IPsec mappings where controller schemas exist; peers, keys/certs, routes, DNS, firewall/NAT, handshakes and client data transfer. Teleport/Site Magic are not assumed equivalent. |
 | Smart Queues / QoS | Missing. | Map rates/directions/flow isolation to OPNsense traffic shaping; test upload/download throughput, loaded latency and queue counters. Report differences in scheduling semantics. |
 | Ethernet flow control | Missing. Distinct from connection Traffic Flows. | Translate supported pause-frame settings through the actual NIC/driver backend and read them back; do not simulate hardware support. |
@@ -48,6 +48,38 @@ GET requests and proposes mappings without writing configuration.
 No checkbox is complete merely because an equivalent OPNsense service exists.
 Some controls need a small local OPNsense extension when REST does not expose
 the required operation. No direct config.xml edits should bypass validation.
+
+## DHCP API validation, 2026-10-20
+
+An isolated OPNsense 26.7 nano VM on phastos, with QEMU user networking and a
+management port bound to localhost, exercised the new translators against real
+REST endpoints. Its credentials and configuration are separate from production.
+The official compressed image SHA256 was verified before boot.
+
+On a temporary VLAN assignment, pool creation read back the requested range,
+255.255.255.0 subnet mask, 7200-second lease, guest.home domain, router option 3
+and DNS option 6. Repeating the same request issued zero POSTs. Cleanup removed
+only the managed pool/options and retained both factory LAN ranges. Relay
+destination and relay creation, readback, zero-write repeat and ordered cleanup
+also passed. Relay service status was red on the inactive test interface, so
+these checks establish API lifecycle correctness, not packet forwarding or
+successful client leases. IPv6 relay addresses have validation tests, not a
+packet-level IPv6 result.
+
+Existing production LAN pools are intentionally not adopted implicitly. A
+conflicting manual pool or router/DNS option rejects controller pool writes.
+The controller's local-IP-to-itself relay representation creates no relay.
+Unsupported server fields reject the pool section rather than disappearing.
+DHCP role transitions with an existing local pool are rejected explicitly.
+Multi-object API updates are not transactional; rollback and recovery after a
+mid-update API failure still need integration coverage.
+
+The base 26.7 assignment API exposes fewer interface fields than the installed
+production 26.7.7 model. In the VM, a newly created VLAN also required the
+interface inventory cache to refresh before assignment validation accepted it.
+An assignment add response UUID differed from the subsequent stable opt1
+identifier. Future interface provisioning must read back the assignment and
+handle version/cache differences before dependent DHCP/firewall writes.
 
 ## Throughput and quality verification, 2026-10-20
 

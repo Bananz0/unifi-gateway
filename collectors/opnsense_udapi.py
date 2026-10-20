@@ -31,6 +31,8 @@ import re
 from .opnsense_api import OPNsenseAPIError
 from .opnsense_ids import apply_ids
 from .opnsense_coverage import untranslated_paths
+from .opnsense_dhcp import plan_servers, sync_servers
+from .opnsense_relay import plan_relays, sync_relays
 from .opnsense_sync import (
     ALIAS_PREFIX, ALIASES, BLOCK_RULE_KEY, BLOCKED_IP_ALIAS, BLOCKED_MAC_ALIAS, DNAT_RULES,
     FILTER_RULES, OPNsenseConfigSync, _as_list, alias_name, is_mirrored,
@@ -255,6 +257,22 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         summary['aliases'] = len(used_aliases)
 
         services = udapi.get('services') or {}
+        if self._enabled('apply_dhcp') and 'dhcpServers' in services:
+            servers = services['dhcpServers'] or []
+            # Older provisioning captures contain reservations only. Those
+            # are not authoritative pool declarations.
+            if not servers or any('rangeStart' in s or 'relay' in s for s in servers):
+                try:
+                    if self._dhcp_backend() == 'dnsmasq':
+                        pools, _ = plan_servers(servers, self.resolve_interface)
+                        relays = plan_relays(servers, self.resolve_interface)
+                        if ({p['interface'] for p in pools.values()}
+                                & {r['interface'] for r in relays.values()}):
+                            raise ValueError('DHCP server and relay cannot share an interface')
+                        summary['dhcp_relays'] = sync_relays(self, servers)
+                        summary['dhcp_pools'] = sync_servers(self, servers)
+                except (OPNsenseAPIError, ValueError, KeyError, TypeError) as e:
+                    self._warn('DHCP pools not applied: %s', e)
         legacy = self._legacy_cfg(udapi)
         for option, name, present, fn in (
                 ('apply_dhcp', 'dhcp_reservations', 'dhcpServers' in services,
