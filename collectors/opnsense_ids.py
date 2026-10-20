@@ -55,6 +55,13 @@ def apply_ids(api, ids, resolve_interface, warn):
         opn_if = resolve_interface(iface.get('id') if isinstance(iface, dict) else iface)
         if opn_if and opn_if not in interfaces:
             added_ifs.add(opn_if)
+    if added_ifs and general.get('ips') == '1':
+        # inline (netmap) Suricata on another interface would sit in the data
+        # path next to Zenarmor; seen in production: adding the LAN restarted
+        # Suricata inline on it. Rulesets still apply on the existing ones.
+        warn('threat management: Suricata runs inline (IPS); not adding %s to it. '
+             'Add interfaces in OPNsense if wanted.' % ', '.join(sorted(added_ifs)))
+        added_ifs = set()
     if 'blocking' in str(ids.get('mode', '')) and general.get('ips') != '1':
         warn('threat management: UniFi asks for blocking (IPS); Suricata is left in '
              'detection mode because inline IPS would compete with Zenarmor for netmap. '

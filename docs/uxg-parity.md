@@ -21,7 +21,7 @@ was checked; "prod" means the live controller and router.
 | DNS host records | yes | yes | lab and prod |
 | Static routes | yes | yes | lab |
 | Region blocking | no | yes (GeoIP alias or ipdeny URL tables) | prod: KP enabled/disabled end to end |
-| Threat Management (IPS) | no | yes, opt-in `ips = true`: Suricata rulesets and interfaces, never inline | lab capture + real OPNsense; offered in prod |
+| Threat Management (IPS) | no | yes, opt-in `ips = true`: Suricata rulesets; interfaces only when Suricata isn't inline | prod run 2026-10-20 08:20: the controller pushed idsIps and the gateway applied it. It added the LAN to an inline (netmap) Suricata, which was reverted by hand within 4 minutes, and the translator now refuses to add interfaces to an inline Suricata |
 | Ad blocking | no | shown from AdGuard Home (Content Filtering profile) | prod profile present |
 | OPNsense -> UniFi mirror | yes (2000+) | yes (20000+, skips operator indexes, default deny) | prod |
 | Reboot | yes (allow_reboot) | yes (same handler) | unit tests |

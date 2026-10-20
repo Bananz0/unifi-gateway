@@ -52,3 +52,12 @@ def test_nothing_to_do_and_disabled():
     n, _, paths, _ = run(api)
     assert n == 0 and paths == []
     assert apply_ids(FakeAPI(), {'enabled': False}, {}.get, print) == 0
+
+
+def test_inline_suricata_gets_no_new_interfaces():
+    """Production: Suricata in IPS (netmap) mode; adding the LAN put it
+    inline next to Zenarmor. Only rulesets may change then."""
+    api = FakeAPI(ips='1')
+    n, warnings, paths, _ = run(api)
+    assert n == 2 and 'ids/settings/set' not in paths
+    assert any('runs inline' in w for w in warnings)
