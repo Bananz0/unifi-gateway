@@ -379,6 +379,13 @@ def _uxg_port_table(config, dc, ports, primary_lan):
             'tx_errors': int(info.get('tx_errors', 0)),
             'rx_dropped': int(info.get('rx_dropped', 0)),
             'tx_dropped': int(info.get('tx_dropped', 0)),
+            # current throughput (bytes/s), which the dashboard and WAN
+            # health show; the controller doesn't derive it for a UXG
+            'rx_bytes-r': int(info.get('rx_bps', 0)),
+            'tx_bytes-r': int(info.get('tx_bps', 0)),
+            'bytes-r': int(info.get('rx_bps', 0)) + int(info.get('tx_bps', 0)),
+            'rx_rate': int(info.get('rx_bps', 0)),
+            'tx_rate': int(info.get('tx_bps', 0)),
             'mac_table': [],
         }
         if port['type'].lower() == 'wan':

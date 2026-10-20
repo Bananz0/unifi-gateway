@@ -191,3 +191,14 @@ def test_triggers_use_udapi_interface_names():
             'ip': {'saddr': '79.124.62.230', 'daddr': '203.0.113.2', 'protocol': 6}}
     p = inform(dc=DC(triggers=[trig]))
     assert p['triggers'][0]['in'] == 'eth4' and 'out' not in p['triggers'][0]
+
+
+def test_port_throughput_rates():
+    """The dashboard's Throughput reads the uplink's *-r rates; a UXG has to
+    report them (the controller showed 0 bps without)."""
+    st = stats(1000)
+    st.update(rx_bps=5000, tx_bps=700)
+    dc = DC()
+    dc.data['ifstat']['eth4'] = st
+    wan = {p['ifname']: p for p in inform(dc=dc)['port_table']}['eth4']
+    assert (wan['rx_bytes-r'], wan['tx_bytes-r'], wan['bytes-r']) == (5000, 700, 5700)
