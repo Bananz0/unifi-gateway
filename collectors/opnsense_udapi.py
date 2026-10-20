@@ -540,6 +540,13 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         if not countries or action not in ('block', 'allow') or                 direction not in ('both', 'ingress', 'egress'):
             self._warn('region blocking skipped: unsupported settings %r', geo)
             return
+        try:
+            source = (self.api.get('firewall/alias/get_geo_i_p').get('alias') or {}).get('geoip') or {}
+        except (OPNsenseAPIError, AttributeError):
+            source = {}
+        if not source.get('url'):
+            self._warn('region blocking: OPNsense has no GeoIP source configured '
+                       '(Firewall > Aliases > GeoIP settings); the country list stays empty')
         name = 'ufg_geoip'
         aliases[name] = self._alias_payload(
             name, 'geoip', countries, 'UniFi region blocking')

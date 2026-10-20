@@ -180,6 +180,8 @@ def test_capabilities_advertise_only_implemented_features():
     assert caps & 1                     # DPI
     for unsupported in (128, 0x40000000, 64, 32):   # IPS, ad block, GeoIP, schedules
         assert not caps & unsupported
+    # region blocking only once OPNsense has a GeoIP database
+    assert inform(dc=DC(geoip_ready=True))['usg_caps'] & 64
 
 
 def test_triggers_use_udapi_interface_names():

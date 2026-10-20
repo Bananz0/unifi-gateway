@@ -178,6 +178,20 @@ class OPNSenseCollector(FreeBSDCollector):
                                      self.wan_identifiers)
         logger.info('Mirroring OPNsense config into the UniFi controller at %s', url)
 
+    def _geoip_ready(self):
+        """Region blocking needs OPNsense's GeoIP database (a MaxMind URL)."""
+        if not self.api:
+            return False
+        stamp, ready = self._cache.get('geoip_ready', (0, False))
+        if time.time() - stamp > 3600:
+            try:
+                geo = (self.api.get('firewall/alias/get_geo_i_p').get('alias') or {}).get('geoip') or {}
+                ready = bool(geo.get('url'))
+            except (OPNsenseAPIError, AttributeError):
+                ready = False
+            self._cache['geoip_ready'] = (time.time(), ready)
+        return ready
+
     def _firewall_log(self):
         if self.fwlog is None:
             names = {}
@@ -352,6 +366,7 @@ class OPNSenseCollector(FreeBSDCollector):
                 self.data['connections'] = self.dpi.take_connections()
         if self.fwlog:
             self.data['triggers'] = self.fwlog.take()
+        self.data['geoip_ready'] = self._geoip_ready()
         if not self.local:
             uptime = self._get_uptime()
             if uptime:

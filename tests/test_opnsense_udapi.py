@@ -401,7 +401,8 @@ class TestRegionBlocking:
     """services.geoipFiltering as captured from Network 10.6.106 after
     enabling Region Blocking for CN and RU."""
 
-    def apply(self, wan_api, wan_sync, **geo):
+    def apply(self, wan_api, wan_sync, geoip_url='https://download.example/geoip.zip', **geo):
+        wan_api.gets['firewall/alias/get_geo_i_p'] = {'alias': {'geoip': {'url': geoip_url}}}
         cfg = copy.deepcopy(WAN_CAPTURE)
         cfg['udapi'].setdefault('services', {})['geoipFiltering'] = {
             'enabled': True, 'action': 'block', 'countryList': ['CN', 'RU'],
@@ -427,6 +428,10 @@ class TestRegionBlocking:
         _, rules, _ = self.apply(wan_api, wan_sync, action='allow', direction='ingress')
         assert set(rules) == {'unifi-gw:ugeo-in-wan'}
         assert rules['unifi-gw:ugeo-in-wan']['source_not'] == '1'
+
+    def test_warns_without_geoip_database(self, wan_api, wan_sync):
+        summary, _, _ = self.apply(wan_api, wan_sync, geoip_url='')
+        assert any('no GeoIP source' in w for w in summary['warnings'])
 
     def test_disabled_removes_rules(self, wan_api, wan_sync):
         self.apply(wan_api, wan_sync)
