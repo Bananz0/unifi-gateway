@@ -115,10 +115,24 @@ live test adoption in a lab controller:
 - **triggerTag:** with trigger logs on, every user rule and port forward
   carries `triggerTag {id, type}` (its UniFi policy). The translator accepts it,
   and firewall-log hits on pushed rules are attributed to that policy.
-- **IPS and ad blocking are not available yet.** With the capability bits
-  advertised in the lab, the 10.6 controller still silently ignores
-  `ips_mode` / `ad_blocking_enabled`. It probably also needs IPS engine data
-  (Suricata versions) in `gw_caps`, which isn't mapped yet.
+- **Threat Management (IPS)** works with `[opnsense] ips = true`, which
+  advertises `usg_caps` 0x80|0x2000. The controller only stores `ips_mode`
+  when `advanced_filtering_preference` is `manual` (the UI sets that), then
+  pushes UDAPI `services.idsIps {enabled, mode: pcap-l3-blocking-<level>,
+  signatures: [ET Open categories], interfaces, blockTime, suppress}` plus
+  `services.utm`. `collectors/opnsense_ids.py` applies it to Suricata
+  additively: it enables the rulesets and interfaces, and never switches to
+  inline IPS, which would compete with Zenarmor's netmap (that gives a
+  warning).
+- **Ad blocking** on 10.6 is a Content Filtering profile
+  (`POST /v2/api/site/{site}/content-filtering/create`, categories
+  `[ADVERTISEMENT]`, schedule `{mode: ALWAYS}`). It does not appear in
+  `system_cfg`: the controller only adds a LAN_IN "allow DNS UTM filter" rule,
+  and a real UXG filters through Ubiquiti's cloud DNS using the UTM token. An
+  OPNsense equivalent would read the profiles from the controller and drive
+  whichever DNS server clients use (AdGuard Home or Unbound DNSBL); not
+  implemented.
+
 - **Speed tests** run off the inform loop. Inline, they stalled informs for
   about 30s and the controller marked wireless clients disconnected.
 
