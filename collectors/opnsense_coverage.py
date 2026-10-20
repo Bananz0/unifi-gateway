@@ -21,6 +21,8 @@ def untranslated_paths(udapi, translated=()):
         for key in iface:
             if key != 'identification':
                 paths.add('interfaces/*/' + key)
+        if 'macOverride' in (iface.get('identification') or {}):
+            paths.add('interfaces/*/identification/macOverride')
     services = udapi.get('services') or {}
     for key, value in services.items():
         if key in {'geoipFiltering', 'idsIps'}:
@@ -34,8 +36,10 @@ def untranslated_paths(udapi, translated=()):
             for field in value or {}:
                 if field != 'hostRecords':
                     paths.add('services/dnsForwarder/' + field)
+        elif 'services/' + key in translated:
+            continue
         elif key not in {'unifiNetwork', 'bleHTTPTransport', 'wifiman'}:
             # Controller transport/device integrations aren't OPNsense
             # services. All other service configuration needs a translator.
             paths.add('services/' + key)
-    return sorted(paths)
+    return sorted(paths - set(translated))

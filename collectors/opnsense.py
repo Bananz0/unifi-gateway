@@ -60,6 +60,10 @@ DEFAULTS = {
     'apply_ids': 'true',
     'apply_interfaces': 'true',
     'apply_vpn': 'false',
+    'apply_ddns': 'false',
+    'apply_shaper': 'false',
+    'apply_mac_override': 'false',
+    'apply_wan_failover': 'false',
     'ips': 'false',
     'block_clients': 'true',
     'allow_reboot': 'false',
@@ -155,7 +159,11 @@ class OPNSenseCollector(FreeBSDCollector):
             options = {k: self._bool(k) for k in (
                 'apply_firewall', 'apply_port_forward', 'apply_dhcp',
                 'apply_dns', 'apply_routes', 'apply_ids', 'apply_interfaces',
-                'apply_vpn')}
+                'apply_vpn', 'apply_ddns', 'apply_shaper', 'apply_mac_override',
+                'apply_wan_failover')}
+            state_dir = os.path.dirname(self._state_path())
+            options['mac_state_file'] = os.path.join(state_dir, 'mac-override.json')
+            options['failover_state_file'] = os.path.join(state_dir, 'wan-failover.json')
             self.sync = OPNsenseConfigSync(
                 self.api, self.port_identifier, self.lan_identifiers,
                 options=options)
@@ -163,6 +171,10 @@ class OPNSenseCollector(FreeBSDCollector):
             self.udapi_sync = UDAPIConfigSync(
                 self.api, self.port_identifier, self.lan_identifiers,
                 options=options)
+            if options['apply_vpn']:
+                # Network 10.6 accepts versions 1-4, 6 and 7; 6+ allows the
+                # "any" listen binding.
+                self.udapi_features = {'vpn/wireguard/servers': 7}
         if self.api and self._bool('auto_ports'):
             existing = ast.literal_eval(config.get('gateway', 'ports'))
             ports, warnings = discover_ports(existing, list(self._overview().values()),

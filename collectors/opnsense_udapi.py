@@ -15,6 +15,10 @@ EdgeOS translator in ``opnsense_sync`` produces, and reuses its machinery
 - ``services.dnsForwarder.hostRecords``   -> Unbound host overrides
 - ``vpn/wireguard/servers`` (opt-in)      -> WireGuard instances, peers,
   firewall and source NAT (``opnsense_wireguard_sync``)
+- ``services.ddns`` (opt-in)              -> ddclient accounts
+- ``qos/ip`` Smart Queues (opt-in)        -> FQ-CoDel shaper pipes/rules
+- ``interfaces[].identification.macOverride`` (opt-in) -> interface spoofmac
+- ``services.wanFailover`` (opt-in)       -> gateway priorities and monitoring
 
 The lab capture (tests/fixtures/uxg_setparam_10.6.106.json) contains no user
 rules, NAT or routes, so the shape of those entries is inferred from the
@@ -36,6 +40,10 @@ from .opnsense_coverage import untranslated_paths
 from .opnsense_dhcp_roles import sync_dhcp_roles
 from .opnsense_interfaces import VLANProvisioner
 from .opnsense_wireguard_sync import RULE_PREFIX as WIREGUARD_RULES, WireGuardSync
+from .opnsense_ddns import sync_ddns
+from .opnsense_failover import FailoverSync, plan_failover
+from .opnsense_macclone import MACOverrideSync, plan_overrides
+from .opnsense_shaper import sync_shaper
 from .opnsense_sync import (
     ALIAS_PREFIX, ALIASES, BLOCK_RULE_KEY, BLOCKED_IP_ALIAS, BLOCKED_MAC_ALIAS, DNAT_RULES,
     FILTER_RULES, OPNsenseConfigSync, _as_list, alias_name, is_mirrored,
@@ -325,11 +333,41 @@ class UDAPIConfigSync(OPNsenseConfigSync):
                 summary['wireguard_servers'] = wireguard.finish()
             except (OPNsenseAPIError, ValueError) as e:
                 self._warn('WireGuard not applied: %s', e)
+        translated = {'vpn/wireguard/servers'} if wireguard is not None else set()
+        # The controller omits services.ddns and qos/ip when they are off, so
+        # absence retires what an earlier push created.
+        for option, name, paths, fn, section in (
+                ('apply_ddns', 'ddns_accounts', ('services/ddns',), sync_ddns,
+                 services.get('ddns')),
+                ('apply_shaper', 'smart_queues', ('qos/ip',), sync_shaper,
+                 udapi.get('qos/ip') or {})):
+            if not self.options.get(option, False):
+                continue
+            try:
+                summary[name] = fn(self, section)
+                translated.update(paths)
+            except (OPNsenseAPIError, ValueError) as e:
+                self._warn('%s not applied: %s', name, e)
+        if self.options.get('apply_wan_failover', False):
+            try:
+                summary['failover_wans'] = FailoverSync(
+                    self.api, self.options['failover_state_file']).sync(
+                    plan_failover(services.get('wanFailover'), self.resolve_interface))
+                translated.add('services/wanFailover')
+            except (OPNsenseAPIError, ValueError, KeyError) as e:
+                self._warn('WAN failover not applied: %s', e)
+        if self.options.get('apply_mac_override', False) and 'interfaces' in udapi:
+            try:
+                summary['mac_overrides'] = MACOverrideSync(
+                    self.api, self.options['mac_state_file']).sync(
+                    plan_overrides(udapi['interfaces'], self.resolve_interface))
+                translated.add('interfaces/*/identification/macOverride')
+            except (OPNsenseAPIError, ValueError, KeyError) as e:
+                self._warn('MAC override not applied: %s', e)
         if interface_sync is not None:
             summary['retired_vlans'] = interface_sync.retire()
         summary['warnings'] = list(self.warnings)
-        summary['untranslated_settings'] = untranslated_paths(
-            udapi, translated={'vpn/wireguard/servers'} if wireguard is not None else ())
+        summary['untranslated_settings'] = untranslated_paths(udapi, translated=translated)
         return summary
 
     def _referenced_aliases(self):

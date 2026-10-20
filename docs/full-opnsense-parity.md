@@ -14,14 +14,14 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 | IPv6 | Owned VLAN static IPv6 and explicit SLAAC mode writes exist alongside selected rule/route handling. Static address confirmed in the lab kernel. This is not a complete IPv6 stack translator. | DHCPv6 WAN, prefix delegation, LAN prefixes, router advertisements, DHCPv6 and DNS, ICMPv6, firewall and routes tested with real clients. |
 | DHCP server | Dnsmasq IPv4 pools, lease duration, subnet mask, domain, router/DNS options, managed listener expansion and scoped cleanup implemented. Real isolated VLAN client received the requested lease/options. Unmanaged conflicts are rejected. Production deployment pending. | Exclusions, NTP, PXE/TFTP, custom options and IPv6 as supported by the actual UniFi schema; controller-driven network defaults and client reachability. Keep Dnsmasq as the production backend. |
 | DHCP relay | DHCRelay destinations, scoped lifecycle and ordered owned server/relay transitions implemented in source, including IPv4/IPv6 address-family validation. Self-relay declarations are ignored; unmanaged services are protected. Real API transitions and running service checks passed. | DHCPv4/DHCPv6 relay packet tests and relay-agent options remain incomplete. Mixed IPv4 roles require strict Dnsmasq interface binding. |
-| VPN | WireGuard servers apply end to end behind opt-in `apply_vpn`: owned instances/peers, listen-port rule scoped by the controller's binding, tunnel rule, source NAT (hybrid/manual mode), service liveness readback and retirement. Lab-verified with a real client; not deployed to production. WireGuard clients/site-to-site, OpenVPN, IPsec and controller VPN status are missing. | Real UI-created controller capture; client DNS/search domains, MSS clamping, controller client status; then OpenVPN/IPsec mappings. Teleport/Site Magic are not assumed equivalent. |
-| Smart Queues / QoS | Missing. | Map rates/directions/flow isolation to OPNsense traffic shaping; test upload/download throughput, loaded latency and queue counters. Report differences in scheduling semantics. |
-| Ethernet flow control | Missing. Distinct from connection Traffic Flows. | Translate supported pause-frame settings through the actual NIC/driver backend and read them back; do not simulate hardware support. |
+| VPN | WireGuard servers apply end to end behind opt-in `apply_vpn`, which also makes the emulator declare `vpn/wireguard/servers` (the controller withholds the section otherwise). Real UI-shaped capture planned; lab-verified with a real client. Not deployed. | Client DNS/search domains, MSS clamping, WireGuard clients/site-to-site, OpenVPN, IPsec, controller VPN status. Teleport/Site Magic are not assumed equivalent. |
+| Smart Queues / QoS | `qos/ip` (captured) -> one FQ-CoDel pipe per direction plus WAN in/out rules, opt-in `apply_shaper`. Refuses to stack on an interface an unmanaged shaper rule already shapes (production has its own 60 Mbit FQ-CoDel). Lab: applied, rule counters matched traffic, zero-write repeat, retirement. | Loaded-latency/throughput measurement through the shaper; per-IP `queues` are rejected, not translated. |
+| Ethernet flow control | No controller field: the 10.6 UXG interface captures carry only `ethernet.lldp`. Nothing to translate. | Re-check if a later controller version adds a pause-frame field. |
 | Speedtest | Background command and result reporting exist. This branch fixes decimal Mbps and newest-result selection. | Test requested from UniFi completes, results arrive at controller, informs continue, errors do not reuse old results as a new success. |
-| MAC cloning | Missing. | Apply/read back interface spoofed MAC; maintain a separate stable emulator identity; reconnect WAN and verify lease/routing recovery. |
-| UPnP/NAT-PMP | Missing. | Installed backend, permitted interfaces/ACLs, live lease list, create/delete/expiry and firewall behavior. No automatic broad exposure. |
-| Dynamic DNS | Account status reads exist; account/provider configuration is missing. | Translate supported providers, credentials and check-IP methods, trigger update and verify published IPv4/IPv6 record and error status. |
-| WAN failover / balancing | Missing. | Gateways/groups, health checks, policy routing, failover and recovery on isolated WANs. |
+| MAC cloning | `identification.macOverride` (captured) -> assignment `spoofmac`, opt-in `apply_mac_override`. State file keeps the previous MAC and restores it unless OPNsense changed it since. Lab: kernel MAC changed and restored; zero-write repeat. | WAN lease/routing recovery after a MAC change on a real ISP; the emulator's own identity is independent of `spoofmac`. |
+| UPnP/NAT-PMP | Captured schema (`secureMode`, `NATPMP`, WAN/LAN interfaces, ACL), but os-upnp 1.9 has no settings API (legacy `services_upnp.php` only). Not translated; reported in `untranslated_settings`. | Needs an MVC/API model in os-upnp or a reviewed local extension; config.xml must not be edited directly. |
+| Dynamic DNS | `services.ddns` (captured) -> tagged os-ddclient accounts, opt-in `apply_ddns`; maps the controller's provider names, its Namecheap and custom-server encodings; rejects Cloudflare (needs a zone UniFi doesn't send) and custom server paths. Lab: applied, zero-write repeat, retirement; unmanaged accounts untouched. | Published-record verification against a real provider account. |
+| WAN failover / balancing | `services.wanFailover` (captured) -> gateway priority = metric, alert monitor interval/window/loss, monitoring on; opt-in `apply_wan_failover`; nothing written for a single WAN. Originals restored. Lab: dynamic and persisted gateways applied/restored. Requires OPNsense "Allow default gateway switching" (on in production). | Real two-WAN failover/recovery exercise; weighted load balancing (needs policy routing) is rejected. |
 | Firewall / NAT | Substantial UDAPI translator exists, with skipped-match protection. Not every policy type is supported. | Both address families, local/forward direction, sets, states, zones, hairpin/SNAT and policy restrictions; packet-level permit/deny tests. |
 | Application blocking | Simple app-ID blocks now reconcile via a separate worker into tagged Zenarmor policies for MACs or IPv4 subnets, with ALWAYS schedules. Configure-disabled/readback/activate, ownership, cleanup, inheritance guards and rejection backoff are implemented. Installed API accepted Instagram and a test MAC but rejected scoped activation with `Upgrade to premium`. | Successful licensed activation and actual denied traffic/unblock recovery; categories, schedules, mixed/overlapping scopes, IPv6 interface scopes, custom-policy inheritance and app-aware traffic/firewall-policy sources remain incomplete. |
 | DNS / mDNS / services | Host records exist; full resolver/forwarder/mDNS/NTP/LLDP configuration is incomplete. | Service-specific writes, reloads and observed behavior; preserve current AdGuard/Unbound/Dnsmasq chain. |
@@ -370,6 +370,36 @@ Production (OPNsense 26.7.7, WireGuard enabled with no instances, hybrid
 outbound NAT) is unchanged; `apply_vpn` defaults to false. Missing: a real
 UI-created controller capture, client DNS/search domains, MSS clamping,
 WireGuard clients/site-to-site, and reporting VPN status to the controller.
+
+## Controller captures and remaining services, 2026-10-20
+
+The lab controller (10.6.106) was configured directly in its database with
+UPnP, DDNS, two WANs, Smart Queues, a MAC override and a WireGuard server
+with one user. Its push to the emulated UXGB is saved, with keys and
+passwords redacted, as `tests/fixtures/uxg_features_10.6.106.json`. Findings:
+
+- The controller emits `vpn/wireguard/servers` only when the device's
+  `udapi_version.versionDetail` declares it. It logs "is defined, but is not
+  supported by firmware" for every undeclared section. Most sections are
+  still sent, but WireGuard servers are withheld. The emulator now declares
+  `{"vpn/wireguard/servers": 7}` only when `apply_vpn` is on.
+- The server's listen binding came through as
+  `{source: interface, id: eth4, ipVersion: v4}`. A user's extra allowed
+  network becomes a peer prefix, and the planner routes it.
+- UPnP is sent only when a LAN has `upnp_lan_enabled`. The ACL denies ports
+  0 and 0-65535 for the LAN subnet; in secure mode it limits mappings to
+  the requester.
+- DDNS with a custom server arrives as `service: custom` plus `server`.
+  Namecheap arrives as `custom` plus `customName: namecheap.N` and a
+  `serverPath` carrying the password.
+- Smart Queues arrive as `qos/ip` in kbit/s, and MAC clone as
+  `identification.macOverride`.
+
+The new translators are all opt-in: `apply_ddns`, `apply_shaper`,
+`apply_mac_override` and `apply_wan_failover`. Each owns only tagged
+objects, or records and restores the previous values of operator objects
+(gateways, `spoofmac`). Each wrote nothing on a repeat in the lab. Evidence:
+phastos `unifi-opnsense-lab/evidence/services-lifecycle.txt`.
 
 ## Later: OpenWrt AP emulation
 

@@ -430,6 +430,14 @@ def _uxg_active_leases(dc, ports, primary_lan):
     return leases
 
 
+def _udapi_version(dc):
+    version = dict(UDAPI_VERSION)
+    features = getattr(dc, 'udapi_features', None)
+    if features:
+        version['versionDetail'] = dict(features)
+    return version
+
+
 def _create_uxg_inform(config, dc, include_blocks=()):
     """Complete inform for a UXG-class model (device = UXGB etc.).
 
@@ -478,7 +486,7 @@ def _create_uxg_inform(config, dc, include_blocks=()):
         'version': config.get('gateway', 'firmware'),
         'time': int(time.time()),
         'uptime': device_uptime,
-        'udapi_version': dict(UDAPI_VERSION),
+        'udapi_version': _udapi_version(dc),
         'uplink': wan_if,
         'port_table': _uxg_port_table(config, dc, ports, lan_if),
         'ipv4_active_leases': _uxg_active_leases(dc, ports, lan_if),

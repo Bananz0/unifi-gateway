@@ -390,7 +390,11 @@ Used when `platform = opnsense` (or auto-detected on OPNsense).
 | `apply_interfaces` | `true` | Provision owned LAN VLANs through the 26.7.7 assignment API; see development limits above |
 | `apply_dns` | `true` | Apply static DNS host records |
 | `apply_routes` | `true` | Apply static routes |
-| `apply_vpn` | `false` | UXG: apply WireGuard VPN servers (instances, peers, listen/tunnel rules, source NAT in hybrid/manual outbound NAT mode) |
+| `apply_vpn` | `false` | UXG: apply WireGuard VPN servers (instances, peers, listen/tunnel rules, source NAT in hybrid/manual outbound NAT mode); also declares WireGuard support to the controller |
+| `apply_ddns` | `false` | UXG: controller Dynamic DNS clients -> os-ddclient accounts |
+| `apply_shaper` | `false` | UXG: Smart Queues -> FQ-CoDel traffic shaper pipes on the WAN (refused if you already shape that interface) |
+| `apply_mac_override` | `false` | UXG: WAN MAC clone -> interface spoofed MAC (renews the WAN lease) |
+| `apply_wan_failover` | `false` | UXG: WAN failover metrics/monitors -> gateway priorities (needs "Allow default gateway switching") |
 | `block_clients` | `true` | Act on block/unblock client requests |
 | `allow_reboot` | `false` | Let the controller reboot the firewall |
 | `traffic_interval` | `30` | Seconds between per-client traffic samples (`0` disables) |

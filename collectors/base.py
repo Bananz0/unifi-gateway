@@ -41,6 +41,10 @@ def speedtest_ping(value):
 
 
 class BaseCollector:
+    # UDAPI sections (-> schema version) this platform applies. A UXG
+    # declares them in udapi_version.versionDetail; the controller withholds
+    # some sections (WireGuard servers) from firmware that doesn't.
+    udapi_features = {}
 
     def __init__(self, config):
         self.data = {}

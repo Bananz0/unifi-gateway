@@ -1,0 +1,208 @@
+{
+ "_note": "Network 10.6.106 lab controller push to an emulated UXGB, 2026-10-20; device declared udapi_version.versionDetail {\"vpn/wireguard/servers\": 7}. Keys/passwords redacted.",
+ "vpn/wireguard/servers": [
+  {
+   "id": "1",
+   "enabled": true,
+   "name": "Lab WireGuard",
+   "address": {
+    "source": "interface",
+    "id": "eth4",
+    "ipVersion": "v4"
+   },
+   "port": 51820,
+   "privateKey": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+   "interfaceIPs": [
+    "10.253.0.1/24"
+   ],
+   "remotePeers": [
+    {
+     "publicKey": "TljxGACCman1gecBSh3FPplYZ2KY3D6fLA23XrBhX2Q=",
+     "allowedIPs": [
+      "10.253.0.2/32",
+      "192.168.77.0/24"
+     ],
+     "name": "Lab Phone"
+    }
+   ],
+   "tunnelMTU": 1420
+  }
+ ],
+ "qos/ip": {
+  "global": {
+   "enabled": true,
+   "connectivity": {
+    "interfaceID": "eth4",
+    "downloadSpeed": 50000,
+    "uploadSpeed": 20000
+   },
+   "defaultQoSIPQueue": {
+    "downloadSpeed": 50000,
+    "uploadSpeed": 20000
+   }
+  },
+  "queues": []
+ },
+ "services": {
+  "upnp": {
+   "secureMode": true,
+   "enabled": true,
+   "NATPMP": true,
+   "wanInterface": {
+    "id": "eth4"
+   },
+   "lanInterfaces": [
+    {
+     "id": "br0"
+    }
+   ],
+   "acl": [
+    {
+     "id": 1,
+     "action": "deny",
+     "externalPort": "0",
+     "localPort": "0-65535",
+     "source": "192.168.10.1/24"
+    },
+    {
+     "id": 2,
+     "action": "deny",
+     "externalPort": "0-65535",
+     "localPort": "0",
+     "source": "192.168.10.1/24"
+    }
+   ]
+  },
+  "ddns": {
+   "enabled": true,
+   "clients": [
+    {
+     "hostname": "lab.example.test",
+     "username": "labuser",
+     "password": "REDACTED",
+     "interface": {
+      "id": "eth4"
+     },
+     "service": "custom",
+     "server": "members.dyndns.org",
+     "customName": "members.dyndns.org"
+    }
+   ]
+  },
+  "wanFailover": {
+   "enabled": true,
+   "wanInterfaces": [
+    {
+     "interface": {
+      "id": "eth4"
+     },
+     "routingTable": 201,
+     "monitors": [
+      {
+       "id": 1,
+       "interval": 3,
+       "timePeriod": 60,
+       "target": "ping.ui.com",
+       "alert": {
+        "lossThreshold": 50
+       }
+      },
+      {
+       "id": 2,
+       "interval": 60,
+       "timePeriod": 86400,
+       "target": "ping.ui.com"
+      }
+     ],
+     "metric": 1
+    },
+    {
+     "interface": {
+      "id": "eth3"
+     },
+     "routingTable": 202,
+     "monitors": [
+      {
+       "id": 3,
+       "interval": 3,
+       "timePeriod": 60,
+       "target": "ping.ui.com",
+       "alert": {
+        "lossThreshold": 50
+       }
+      },
+      {
+       "id": 4,
+       "interval": 60,
+       "timePeriod": 86400,
+       "target": "ping.ui.com"
+      }
+     ],
+     "metric": 2
+    }
+   ]
+  }
+ },
+ "interfaces": [
+  {
+   "identification": {
+    "id": "eth4",
+    "type": "ethernet",
+    "mac": "02:11:22:33:44:55",
+    "macOverride": "02:11:22:33:44:55"
+   },
+   "status": {
+    "enabled": true,
+    "comment": "WAN"
+   },
+   "addresses": [
+    {
+     "type": "dynamic",
+     "cidr": null,
+     "origin": "dhcp",
+     "version": "v4"
+    }
+   ],
+   "ipv4": {},
+   "ethernet": {
+    "lldp": {
+     "enabled": false
+    }
+   }
+  },
+  {
+   "identification": {
+    "id": "br0",
+    "type": "bridge"
+   },
+   "status": {
+    "enabled": true,
+    "comment": "LAN"
+   },
+   "addresses": [
+    {
+     "type": "static",
+     "cidr": "192.168.10.1/24",
+     "version": "v4"
+    }
+   ],
+   "bridge": {
+    "interfaces": [
+     {
+      "id": "switch0.1"
+     }
+    ],
+    "id": 0
+   }
+  },
+  {
+   "identification": {
+    "id": "eth3",
+    "type": "ethernet"
+   },
+   "status": {
+    "enabled": false
+   }
+  }
+ ]
+}
