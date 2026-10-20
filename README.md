@@ -390,6 +390,7 @@ Used when `platform = opnsense` (or auto-detected on OPNsense).
 | `apply_interfaces` | `true` | Provision owned LAN VLANs through the 26.7.7 assignment API; see development limits above |
 | `apply_dns` | `true` | Apply static DNS host records |
 | `apply_routes` | `true` | Apply static routes |
+| `apply_vpn` | `false` | UXG: apply WireGuard VPN servers (instances, peers, listen/tunnel rules, source NAT in hybrid/manual outbound NAT mode) |
 | `block_clients` | `true` | Act on block/unblock client requests |
 | `allow_reboot` | `false` | Let the controller reboot the firewall |
 | `traffic_interval` | `30` | Seconds between per-client traffic samples (`0` disables) |

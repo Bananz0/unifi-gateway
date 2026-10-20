@@ -5,10 +5,11 @@ This is coverage reporting, not a schema validator for supported translators.
 """
 
 
-def untranslated_paths(udapi):
+def untranslated_paths(udapi, translated=()):
+    """``translated``: further root paths an opt-in translator applied."""
     paths = set()
     supported_roots = {'firewall/filter', 'firewall/nat', 'firewall/sets',
-                       'routes/static', 'services'}
+                       'routes/static', 'services'} | set(translated)
     metadata = {'unifi', 'version', 'versionDetail', 'versionFormat'}
     for key in udapi:
         if key not in supported_roots | metadata | {'interfaces', 'system'}:

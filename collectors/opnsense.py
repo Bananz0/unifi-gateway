@@ -59,6 +59,7 @@ DEFAULTS = {
     'apply_routes': 'true',
     'apply_ids': 'true',
     'apply_interfaces': 'true',
+    'apply_vpn': 'false',
     'ips': 'false',
     'block_clients': 'true',
     'allow_reboot': 'false',
@@ -153,7 +154,8 @@ class OPNSenseCollector(FreeBSDCollector):
         if self.api:
             options = {k: self._bool(k) for k in (
                 'apply_firewall', 'apply_port_forward', 'apply_dhcp',
-                'apply_dns', 'apply_routes', 'apply_ids', 'apply_interfaces')}
+                'apply_dns', 'apply_routes', 'apply_ids', 'apply_interfaces',
+                'apply_vpn')}
             self.sync = OPNsenseConfigSync(
                 self.api, self.port_identifier, self.lan_identifiers,
                 options=options)

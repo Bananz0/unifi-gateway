@@ -14,7 +14,7 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 | IPv6 | Owned VLAN static IPv6 and explicit SLAAC mode writes exist alongside selected rule/route handling. Static address confirmed in the lab kernel. This is not a complete IPv6 stack translator. | DHCPv6 WAN, prefix delegation, LAN prefixes, router advertisements, DHCPv6 and DNS, ICMPv6, firewall and routes tested with real clients. |
 | DHCP server | Dnsmasq IPv4 pools, lease duration, subnet mask, domain, router/DNS options, managed listener expansion and scoped cleanup implemented. Real isolated VLAN client received the requested lease/options. Unmanaged conflicts are rejected. Production deployment pending. | Exclusions, NTP, PXE/TFTP, custom options and IPv6 as supported by the actual UniFi schema; controller-driven network defaults and client reachability. Keep Dnsmasq as the production backend. |
 | DHCP relay | DHCRelay destinations, scoped lifecycle and ordered owned server/relay transitions implemented in source, including IPv4/IPv6 address-family validation. Self-relay declarations are ignored; unmanaged services are protected. Real API transitions and running service checks passed. | DHCPv4/DHCPv6 relay packet tests and relay-agent options remain incomplete. Mixed IPv4 roles require strict Dnsmasq interface binding. |
-| VPN | WireGuard server/peer planning now follows controller serializer fields; direct isolated API application passed real dual-stack tunnel and peer-prefix tests. No provisioning integration or controller VPN status yet. Existing OPNsense OpenVPN configuration is independent. | Complete WireGuard lifecycle, routing, DNS, firewall/NAT, listen binding and status; then OpenVPN/IPsec mappings. Teleport/Site Magic are not assumed equivalent. |
+| VPN | WireGuard servers apply end to end behind opt-in `apply_vpn`: owned instances/peers, listen-port rule scoped by the controller's binding, tunnel rule, source NAT (hybrid/manual mode), service liveness readback and retirement. Lab-verified with a real client; not deployed to production. WireGuard clients/site-to-site, OpenVPN, IPsec and controller VPN status are missing. | Real UI-created controller capture; client DNS/search domains, MSS clamping, controller client status; then OpenVPN/IPsec mappings. Teleport/Site Magic are not assumed equivalent. |
 | Smart Queues / QoS | Missing. | Map rates/directions/flow isolation to OPNsense traffic shaping; test upload/download throughput, loaded latency and queue counters. Report differences in scheduling semantics. |
 | Ethernet flow control | Missing. Distinct from connection Traffic Flows. | Translate supported pause-frame settings through the actual NIC/driver backend and read them back; do not simulate hardware support. |
 | Speedtest | Background command and result reporting exist. This branch fixes decimal Mbps and newest-result selection. | Test requested from UniFi completes, results arrive at controller, informs continue, errors do not reuse old results as a new success. |
@@ -324,6 +324,52 @@ preflight, persistent retry/rollback, key rotation, firewall/NAT, scoped listen
 binding, routing, client DNS and controller status still require implementation.
 No production VPN was changed. OpenVPN, IPsec and AP emulation remain separate
 unfinished parts of the original parity target.
+
+## WireGuard server lifecycle, 2026-10-20
+
+The planner's schema came from serializers and assumed a string listen
+address. The decompiled Network 10.6 server factory sends
+`vpn/wireguard/servers` only when servers exist, with string IDs and
+`address` as a binding object: `{source: any|wan|interface|static, address,
+id, ipVersion}`. The planner now accepts that object; every real push would
+otherwise have been rejected. OPNsense instances listen on all addresses, so
+the binding scopes the WAN rule (`wanip`, `<if>ip` or the static address).
+Routes are installed only for peer prefixes outside the tunnel networks; a
+peer default route is rejected.
+
+`opnsense_wireguard_sync.WireGuardSync` applies the plan in two phases
+around the firewall sync, because rules can name the `wireguard` group
+only after an instance exists. It compares against `get_*` detail, since
+search rows omit keys. It reads instance UUIDs back by name before binding
+peers. The tunnel rule's source is a `ufg_wg_` alias: OPNsense rejects a
+mixed IPv4/IPv6 list. Retired tunnels are disabled and reconfigured before
+their records are deleted. The service status endpoint reports "unknown"
+even while running, so `wireguard/service/show` must list every enabled
+owned instance as up with its peers; otherwise the push fails and is retried.
+Unmanaged instances on the same port reject the plan. A failed translation
+keeps the last applied rules. A missing section retires everything owned.
+
+Isolated 26.7.7 VM, with a separate client container:
+- Create made one reconfigure; a repeat made zero POSTs.
+- Host UDP to the listen port created an inbound pf state once lab-only WAN
+  private-network blocking was off. QEMU user networking delivers from a
+  private address.
+- Handshake, then 3/3 pings each to the tunnel IPv4/IPv6 addresses and the
+  LAN address.
+- With the tunnel rule disabled, 0/3; the next sync restored it in two writes.
+- In hybrid outbound NAT, TCP to the WAN side returned an SSH banner, and
+  the state showed translation to the WAN address.
+- In automatic mode, after filter apply, the state was untranslated and the
+  connection failed. Automatic generation only covers assigned interfaces,
+  so the translator warns rather than changing the operator's mode.
+- Retirement left no records, rules, NAT, aliases or devices. Repeats were
+  zero-write. The same results held through `apply_system_cfg`.
+
+Evidence: phastos `unifi-opnsense-lab/evidence/wireguard-lifecycle*`.
+Production (OPNsense 26.7.7, WireGuard enabled with no instances, hybrid
+outbound NAT) is unchanged; `apply_vpn` defaults to false. Missing: a real
+UI-created controller capture, client DNS/search domains, MSS clamping,
+WireGuard clients/site-to-site, and reporting VPN status to the controller.
 
 ## Later: OpenWrt AP emulation
 

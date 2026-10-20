@@ -1,8 +1,8 @@
-"""Pure UDAPI WireGuard server/peer planning for OPNsense's MVC model.
+"""UDAPI ``vpn/wireguard/servers`` on OPNsense's WireGuard MVC model.
 
-The field names follow the controller's WireGuard server/remote-peer serializers.
-This is not yet called by provisioning: firewall, routes, scoped listen-address
-binding and controller status must be implemented before enabling that path.
+The field names follow the controller's WireGuard server/remote-peer
+serializers (Network 10.6). Planning here is pure; ``opnsense_wireguard_sync``
+applies a plan to OPNsense.
 No private keys or preshared keys belong in diagnostics or plan summaries.
 """
 import base64
@@ -72,13 +72,47 @@ def _endpoint(value):
     return str(addr)
 
 
+LISTEN_FIELDS = {'source', 'address', 'id', 'ipVersion'}
+
+
+def _listen(value):
+    """The controller's listen binding: {source: any|wan|interface|static,
+    address (static), id (interface), ipVersion}. OPNsense instances listen
+    on every address; the binding scopes the firewall rule admitting them."""
+    if value in (None, '', '0.0.0.0', '::'):
+        return {'source': 'any', 'ipVersion': None}
+    if not isinstance(value, dict) or set(value) - LISTEN_FIELDS:
+        raise ValueError('unsupported WireGuard listen binding')
+    source, version = value.get('source'), value.get('ipVersion')
+    if version not in (None, 'v4', 'v6'):
+        raise ValueError('invalid WireGuard listen IP version')
+    if source in ('any', 'wan') and not {'address', 'id'} & set(value):
+        return {'source': source, 'ipVersion': version}
+    if source == 'interface' and isinstance(value.get('id'), str) and value['id']             and 'address' not in value:
+        return {'source': source, 'id': value['id'], 'ipVersion': version}
+    if source == 'static' and 'id' not in value:
+        try:
+            addr = ipaddress.ip_address(value.get('address'))
+        except (TypeError, ValueError):
+            raise ValueError('invalid WireGuard static listen address') from None
+        if addr.is_unspecified or addr.is_multicast or addr.is_loopback:
+            raise ValueError('invalid WireGuard static listen address')
+        return {'source': source, 'address': str(addr), 'ipVersion': version}
+    raise ValueError('unsupported WireGuard listen binding')
+
+
+def _default_route(network):
+    return ipaddress.ip_network(network).prefixlen == 0
+
+
 def plan_servers(section):
     """Return server payloads/peer references and peers; perform no API calls.
 
-    OPNsense calls instances 'servers' and remote peers 'clients'. Route
-    installation is deliberately disabled here; it belongs to the routing
-    translator, rather than implicitly replacing existing host/default routes.
-    Names encode ownership because these models have no description field.
+    OPNsense calls instances 'servers' and remote peers 'clients'. Routes are
+    installed only for peer prefixes outside the instance's own networks, and
+    a peer claiming a default route is rejected rather than replacing the
+    router's. Names encode ownership because these models have no description
+    field.
     """
     if not isinstance(section, list):
         raise ValueError('WireGuard server section must be a list')
@@ -95,8 +129,9 @@ def plan_servers(section):
         enabled = body.get('enabled')
         if not isinstance(enabled, bool):
             raise ValueError('WireGuard enabled flag must be boolean')
-        if body.get('address') not in (None, '', '0.0.0.0', '::'):
-            raise ValueError('WireGuard scoped listen address requires firewall binding')
+        if isinstance(body.get('address'), str) and body['address'] not in ('', '0.0.0.0', '::'):
+            raise ValueError('WireGuard listen address must be a controller binding')
+        listen = _listen(body.get('address'))
         for field in ('tunnelMSSClamping', 'tunnelMSS6Clamping', 'dnsServers', 'searchDomains'):
             if body.get(field):
                 raise ValueError('WireGuard ' + field + ' requires a dedicated translator')
@@ -150,7 +185,16 @@ def plan_servers(section):
                 keepalive = _integer(peer['persistentKeepAlive'], 'keepalive', 0, 65535)
                 peers[peer_name]['keepalive'] = '' if keepalive == '0' else keepalive
             references.append(peer_name)
-        servers[name] = {'payload': payload, 'peers': references}
+        local = [ipaddress.ip_interface(a).network for a in payload['tunneladdress'].split(',')]
+        remote_prefixes = sorted({n for ref in references for n in peers[ref]['tunneladdress'].split(',')
+                                  if not any(ipaddress.ip_network(n).subnet_of(net)
+                                             for net in local
+                                             if net.version == ipaddress.ip_network(n).version)})
+        if any(_default_route(n) for n in remote_prefixes):
+            raise ValueError('WireGuard peer default routes are not supported on a server')
+        payload['disableroutes'] = '0' if remote_prefixes else '1'
+        servers[name] = {'payload': payload, 'peers': references, 'listen': listen,
+                         'networks': sorted({str(n) for n in local} | set(remote_prefixes))}
     return servers, peers
 
 

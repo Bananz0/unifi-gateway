@@ -13,6 +13,8 @@ EdgeOS translator in ``opnsense_sync`` produces, and reuses its machinery
 - ``routes/static``                      -> routes (+ gateways if needed)
 - ``services.dhcpServers[].staticLeases`` -> Kea reservations / Dnsmasq hosts
 - ``services.dnsForwarder.hostRecords``   -> Unbound host overrides
+- ``vpn/wireguard/servers`` (opt-in)      -> WireGuard instances, peers,
+  firewall and source NAT (``opnsense_wireguard_sync``)
 
 The lab capture (tests/fixtures/uxg_setparam_10.6.106.json) contains no user
 rules, NAT or routes, so the shape of those entries is inferred from the
@@ -33,6 +35,7 @@ from .opnsense_ids import apply_ids
 from .opnsense_coverage import untranslated_paths
 from .opnsense_dhcp_roles import sync_dhcp_roles
 from .opnsense_interfaces import VLANProvisioner
+from .opnsense_wireguard_sync import RULE_PREFIX as WIREGUARD_RULES, WireGuardSync
 from .opnsense_sync import (
     ALIAS_PREFIX, ALIASES, BLOCK_RULE_KEY, BLOCKED_IP_ALIAS, BLOCKED_MAC_ALIAS, DNAT_RULES,
     FILTER_RULES, OPNsenseConfigSync, _as_list, alias_name, is_mirrored,
@@ -219,10 +222,31 @@ class UDAPIConfigSync(OPNsenseConfigSync):
 
         do_filter = self._enabled('apply_firewall') and 'firewall/filter' in udapi
         do_nat = self._enabled('apply_port_forward') and 'firewall/nat' in udapi
+        # Instances must exist before rules can name the wireguard group. The
+        # controller omits the section when there are no servers, so absence
+        # retires every owned instance. Opt-in: off unless apply_vpn is set.
+        wireguard, wg_rules = None, {}
+        if self.options.get('apply_vpn', False):
+            wireguard = WireGuardSync(self)
+            try:
+                wg_rules = wireguard.prepare(udapi.get('vpn/wireguard/servers') or [])
+            except (OPNsenseAPIError, ValueError) as e:
+                self._warn('WireGuard not applied: %s', e)
+                wireguard = None
         rules, used_aliases, rules_failed = {}, {}, set()
         if do_filter:
             rules, used_aliases, rules_failed = self._translate_filter(
                 udapi['firewall/filter'], sets)
+        if self.options.get('apply_vpn', False):
+            if wireguard is None:
+                rules_failed.add(WIREGUARD_RULES)  # keep the last applied rules
+            rules.update(wg_rules)
+            if not do_filter:
+                changed, _ = self.sync_items(
+                    FILTER_RULES, wg_rules,
+                    keep=lambda k: wireguard is None or not k.startswith(WIREGUARD_RULES))
+                if changed:
+                    self.apply_filter()
         forwards, fwd_failed = {}, set()
         if do_nat:
             forwards, fwd_aliases, fwd_failed = self._translate_nat(
@@ -296,10 +320,16 @@ class UDAPIConfigSync(OPNsenseConfigSync):
             except OPNsenseAPIError as e:
                 self._warn('threat management not applied: %s', e)
 
+        if wireguard is not None:
+            try:
+                summary['wireguard_servers'] = wireguard.finish()
+            except (OPNsenseAPIError, ValueError) as e:
+                self._warn('WireGuard not applied: %s', e)
         if interface_sync is not None:
             summary['retired_vlans'] = interface_sync.retire()
         summary['warnings'] = list(self.warnings)
-        summary['untranslated_settings'] = untranslated_paths(udapi)
+        summary['untranslated_settings'] = untranslated_paths(
+            udapi, translated={'vpn/wireguard/servers'} if wireguard is not None else ())
         return summary
 
     def _referenced_aliases(self):
