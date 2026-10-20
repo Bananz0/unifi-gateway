@@ -107,6 +107,21 @@ live test adoption in a lab controller:
 - **`usg_caps`** is now sent with only the implemented bits (DPI, trigger logs).
   `gw_caps` only holds IPS engine data on 10.6 and stays empty.
 
+- **Region Blocking** (`usg_geo.ip_filtering` in the controller) is pushed as
+  UDAPI `services.geoipFiltering {enabled, action: block|allow, countryList,
+  direction: both|ingress|egress, interfaces}` and translated to a `ufg_geoip`
+  GeoIP alias with WAN in/out block rules. The UXG only advertises it
+  (`usg_caps` 0x40) once OPNsense has a GeoIP source (MaxMind URL) configured.
+- **triggerTag:** with trigger logs on, every user rule and port forward
+  carries `triggerTag {id, type}` (its UniFi policy). The translator accepts it,
+  and firewall-log hits on pushed rules are attributed to that policy.
+- **IPS and ad blocking are not available yet.** With the capability bits
+  advertised in the lab, the 10.6 controller still silently ignores
+  `ips_mode` / `ad_blocking_enabled`. It probably also needs IPS engine data
+  (Suricata versions) in `gw_caps`, which isn't mapped yet.
+- **Speed tests** run off the inform loop. Inline, they stalled informs for
+  about 30s and the controller marked wireless clients disconnected.
+
 ## UXG mode (branch `feat/uxg-mode`)
 
 Set `device = UXGB` (or `UXG`, `UXGPRO`, `UXGA6AA`) in `[gateway]`, with
