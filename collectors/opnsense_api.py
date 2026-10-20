@@ -46,7 +46,7 @@ class OPNsenseAPI:
             url += '?' + urllib.parse.urlencode(params)
         headers = {'Authorization': self._auth, 'Accept': 'application/json'}
         data = None
-        if method == 'POST':
+        if method in ('POST', 'PUT', 'PATCH'):
             data = json.dumps(payload if payload is not None else {}).encode('utf-8')
             headers['Content-Type'] = 'application/json'
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -84,6 +84,10 @@ class OPNsenseAPI:
 
     def post(self, path, payload=None, timeout=None):
         return self._request('POST', path, payload=payload, timeout=timeout)
+
+    def put(self, path, payload=None, params=None, timeout=None):
+        """Plugin APIs such as Zenarmor use PUT for policy updates."""
+        return self._request('PUT', path, payload=payload, params=params, timeout=timeout)
 
     def search(self, path, params=None, timeout=None):
         """Return all rows of a search endpoint (searchBase/searchRecordsetBase)."""

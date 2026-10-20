@@ -23,6 +23,7 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 | Dynamic DNS | Account status reads exist; account/provider configuration is missing. | Translate supported providers, credentials and check-IP methods, trigger update and verify published IPv4/IPv6 record and error status. |
 | WAN failover / balancing | Missing. | Gateways/groups, health checks, policy routing, failover and recovery on isolated WANs. |
 | Firewall / NAT | Substantial UDAPI translator exists, with skipped-match protection. Not every policy type is supported. | Both address families, local/forward direction, sets, states, zones, hairpin/SNAT and policy restrictions; packet-level permit/deny tests. |
+| Application blocking | Zenarmor DPI telemetry is read-only and does not enforce UniFi app blocks. Exact-name ID resolution and explicit Zenarmor policy app-delta writes with readback now exist as primitives; automatic UniFi rule/scope translation remains missing. | Capture `v2/firewall-app-blocks`, traffic rules and app-aware firewall policies; preserve scope, schedules, ownership and manual app controls; test actual denied traffic and unblock recovery. |
 | DNS / mDNS / services | Host records exist; full resolver/forwarder/mDNS/NTP/LLDP configuration is incomplete. | Service-specific writes, reloads and observed behavior; preserve current AdGuard/Unbound/Dnsmasq chain. |
 | Insights / Flows | DPI, country accounting, Netflow totals, allowed connections and firewall triggers exist in the baseline. | Counter reconciliation, attribution, restarts, retention, interface mapping and UI/API validation. |
 | Internet Quality | dpinger latency/loss now populate `uptime_stats`; WAN Insights overview and latency history confirmed on production Network 10.6. | Outage/recovery packet-level exercise and additional WANs; duration starts with actual collector observations. No historical backfill. |
@@ -80,6 +81,27 @@ interface inventory cache to refresh before assignment validation accepted it.
 An assignment add response UUID differed from the subsequent stable opt1
 identifier. Future interface provisioning must read back the assignment and
 handle version/cache differences before dependent DHCP/firewall writes.
+
+## Instagram blocking investigation, 2026-10-20
+
+Live controller GETs returned no simple app blocks (`v2/firewall-app-blocks`),
+no traffic rules, and no non-mirrored user firewall policies in its sole Default
+site. The stored UDAPI payload contained no application matches. Zenarmor's
+active Default policy had no app controls. Its installed application catalog
+recognized Instagram as 10745, whereas UniFi's catalog uses 1573022. These IDs
+are independent and must be mapped rather than copied. This establishes that
+Instagram was not configured to be blocked; it does not explain why the user's
+attempt did not leave a saved controller rule.
+
+The new API primitive uses the installed plugin's PUT `appControls` operation,
+updates explicit apps only, checks policy identity when requested, and reads the
+result back. Unit tests cover exact-name mapping, ambiguity rejection, manual
+block preservation, idempotence and failed/mismatched backend updates. It is not
+connected to automatic controller-rule enforcement or deployed to production.
+Device/network scope must come from the actual saved UniFi rule before applying
+a block. Additional Zenarmor policy activation is subject to the installed
+license checks; the bridge must not bypass them or widen a device-only block
+into the Default policy.
 
 ## Throughput and quality verification, 2026-10-20
 
