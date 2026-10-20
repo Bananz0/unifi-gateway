@@ -14,7 +14,7 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 | IPv6 | Owned VLAN static IPv6 and explicit SLAAC mode writes exist alongside selected rule/route handling. Static address confirmed in the lab kernel. This is not a complete IPv6 stack translator. | DHCPv6 WAN, prefix delegation, LAN prefixes, router advertisements, DHCPv6 and DNS, ICMPv6, firewall and routes tested with real clients. |
 | DHCP server | Dnsmasq IPv4 pools, lease duration, subnet mask, domain, router/DNS options, managed listener expansion and scoped cleanup implemented. Real isolated VLAN client received the requested lease/options. Unmanaged conflicts are rejected. Production deployment pending. | Exclusions, NTP, PXE/TFTP, custom options and IPv6 as supported by the actual UniFi schema; controller-driven network defaults and client reachability. Keep Dnsmasq as the production backend. |
 | DHCP relay | DHCRelay destinations, scoped lifecycle and ordered owned server/relay transitions implemented in source, including IPv4/IPv6 address-family validation. Self-relay declarations are ignored; unmanaged services are protected. Real API transitions and running service checks passed. | DHCPv4/DHCPv6 relay packet tests and relay-agent options remain incomplete. Mixed IPv4 roles require strict Dnsmasq interface binding. |
-| VPN | Missing translation for tunnel configuration and status. Existing OPNsense OpenVPN configuration is independent. | WireGuard first, then OpenVPN/IPsec mappings where controller schemas exist; peers, keys/certs, routes, DNS, firewall/NAT, handshakes and client data transfer. Teleport/Site Magic are not assumed equivalent. |
+| VPN | WireGuard server/peer planning now follows controller serializer fields; direct isolated API application passed real dual-stack tunnel and peer-prefix tests. No provisioning integration or controller VPN status yet. Existing OPNsense OpenVPN configuration is independent. | Complete WireGuard lifecycle, routing, DNS, firewall/NAT, listen binding and status; then OpenVPN/IPsec mappings. Teleport/Site Magic are not assumed equivalent. |
 | Smart Queues / QoS | Missing. | Map rates/directions/flow isolation to OPNsense traffic shaping; test upload/download throughput, loaded latency and queue counters. Report differences in scheduling semantics. |
 | Ethernet flow control | Missing. Distinct from connection Traffic Flows. | Translate supported pause-frame settings through the actual NIC/driver backend and read them back; do not simulate hardware support. |
 | Speedtest | Background command and result reporting exist. This branch fixes decimal Mbps and newest-result selection. | Test requested from UniFi completes, results arrive at controller, informs continue, errors do not reuse old results as a new success. |
@@ -290,6 +290,40 @@ egress-policy support. The lab evidence remains outside the repository.
 Instagram enforcement remains unverified pending a user-created rule. The
 installed Zenarmor license rejected scoped policy activation with "Upgrade to
 premium"; changing the shared Default policy is not a safe substitute.
+
+## WireGuard foundation and real tunnel validation, 2026-10-20
+
+`opnsense_wireguard.py` is a pure planner, not yet called by the daemon. Server
+and peer field names were checked against the controller's WireGuard serializers
+and OPNsense MVC models. This is serializer-derived schema evidence, not a
+captured UI-created VPN provision. It maps keys, IPv4/IPv6 interface addresses,
+allowed prefixes, endpoints, preshared keys, keepalive and MTU. Unsupported scoped
+listen addresses, MSS options, client DNS/search-domain settings and WAN policy
+reject the plan explicitly. Owned object names are hashes with `ufg_wgs_` and
+`ufg_wgp_` prefixes because these models lack a description field. Key material
+must never be logged with plans or summaries.
+
+Direct application of its output to the isolated OPNsense VM created one
+instance and peer and established a WireGuard handshake with a separate VNET
+jail. A temporary lab-only local firewall rule allowed decrypted test traffic.
+IPv4 and IPv6 tunnel pings each passed three of three packets. A 768-byte
+underlay capture showed UDP/51890 traffic between the underlay addresses.
+Removing only the peer's IPv6 allowed prefix left IPv4 working and blocked both
+IPv6 probes. Restoring the full translated plan restored both families.
+These checks prove tunnel-to-router traffic, not routed LAN/Internet access.
+
+The first peer-edit experiment detached the peer entirely: OPNsense's volatile
+`client.servers` field is write-active and omitting it clears instance membership.
+The `bind_peers` helper now requires a complete instance UUID map and writes
+explicit membership, with tests for missing/invalid/orphan references. The final
+restoration test used that helper against the real API.
+
+No routes are installed by this planner; `disableroutes=1` prevents implicit
+host/default route replacement. Instance/peer lifecycle, ownership and collision
+preflight, persistent retry/rollback, key rotation, firewall/NAT, scoped listen
+binding, routing, client DNS and controller status still require implementation.
+No production VPN was changed. OpenVPN, IPsec and AP emulation remain separate
+unfinished parts of the original parity target.
 
 ## Later: OpenWrt AP emulation
 
