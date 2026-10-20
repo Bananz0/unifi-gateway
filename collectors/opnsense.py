@@ -43,6 +43,7 @@ from .client_traffic import ClientTraffic
 from .unifi_mirror import OPNsenseMirror, UniFiController
 from .opnsense_appblocks import SimpleAppBlockSync
 from .adguard_appblocks import AdGuardAppBlockSync, AdGuardHome
+from .ntopng import NtopngDPI
 
 logger = logging.getLogger('unifi-gateway')
 
@@ -91,6 +92,9 @@ UNIFI_DEFAULTS = {
     # zenarmor | adguard: what enforces UniFi simple app blocks
     'app_control_backend': 'zenarmor',
 }
+NTOPNG_SECTION = 'ntopng'
+NTOPNG_POLL_INTERVAL = 10
+NTOPNG_DEFAULTS = {'url': 'http://127.0.0.1:3001', 'username': '', 'password': ''}
 ADGUARD_SECTION = 'adguard'
 ADGUARD_DEFAULTS = {'url': 'http://127.0.0.1:3000', 'username': '', 'password': ''}
 
@@ -149,7 +153,20 @@ class OPNSenseCollector(FreeBSDCollector):
         self._provision_retry_thread = None
         self._pending_system_cfg = None
         self._init_mirror(config)
-        if str(self.opts['dpi']).lower() not in ('0', 'false', 'no', 'off'):
+        mode = str(self.opts['dpi']).lower()
+        ntop = self._ntopng_options(config)
+        if mode in ('auto', 'ntopng') and ntop:
+            # nDPI via ntopng: live flows, read from its REST API
+            dpi = NtopngDPI(ntop['url'], ntop['username'], ntop['password'], self._mac_for_ip,
+                state_file=os.path.join(os.path.dirname(self._state_path()), 'ntopng-dpi.json'))
+            if dpi.available:
+                self.dpi = dpi
+                dpi.flows = self._bool('flows')
+                logger.info('Reporting DPI statistics%s from ntopng (%s)',
+                            ' and Traffic Flows' if dpi.flows else '', ntop['url'])
+        elif mode == 'ntopng':
+            logger.warning('dpi = ntopng needs [ntopng] url/username/password')
+        if self.dpi is None and mode in ('auto', 'zenarmor', '1', 'true', 'yes', 'on'):
             dpi = ZenarmorDPI(self.opts['zenarmor_db'],
                 state_file=os.path.join(os.path.dirname(self._state_path()), 'zenarmor-dpi.json'))
             if dpi.available:
@@ -158,7 +175,7 @@ class OPNSenseCollector(FreeBSDCollector):
                 if dpi.flows:
                     logger.info('Reporting Zenarmor connections as Traffic Flows')
                 logger.info('Reporting DPI statistics from Zenarmor (%s)', dpi.db_path)
-            elif str(self.opts['dpi']).lower() not in ('auto',):
+            elif mode != 'auto':
                 logger.warning('Zenarmor database %s not found, DPI disabled', dpi.db_path)
         self._state = self._load_state()
         self.sync = None
@@ -384,6 +401,36 @@ class OPNSenseCollector(FreeBSDCollector):
 
     # ── API helpers ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _ntopng_options(config):
+        if not config.has_section(NTOPNG_SECTION):
+            return None
+        opts = dict(NTOPNG_DEFAULTS)
+        opts.update({k: config.get(NTOPNG_SECTION, k) for k in NTOPNG_DEFAULTS
+                     if config.has_option(NTOPNG_SECTION, k)})
+        return opts if opts['username'] and opts['password'] else None
+
+    def _mac_for_ip(self, ip):
+        """MAC of a LAN device by IPv4/IPv6 address, from the ARP table and
+        OPNsense host discovery (both cached)."""
+        if not ip:
+            return None
+        stamp, table = getattr(self, '_ip_mac', (0, {}))
+        if time.time() - stamp > 30:
+            table = {}
+            for row in self._call('hostwatch', lambda: self.api.search(
+                    'hostdiscovery/service/search'), ttl=60, max_stale=300) or []:
+                mac = normalize_mac(row.get('ether_address'))
+                if mac and row.get('ip_address'):
+                    table[row['ip_address'].lower()] = mac
+            for row in self._call('arp', lambda: self.api.search(
+                    'diagnostics/interface/search_arp'), ttl=30, max_stale=30) or []:
+                mac = normalize_mac(row.get('mac'))
+                if mac and row.get('ip') and not row.get('expired'):
+                    table[row['ip'].lower()] = mac
+            self._ip_mac = (time.time(), table)
+        return table.get(str(ip).lower())
+
     def _call(self, name, fn, ttl=0, max_stale=None):
         """Run an API read with caching and de-duplicated error logging.
         Returns None on failure."""
@@ -442,6 +489,7 @@ class OPNSenseCollector(FreeBSDCollector):
         if self.api is None:
             return
         self._ensure_traffic_sampler()
+        self._ensure_dpi_poller()
         self._ensure_mirror()
         self._ensure_app_control()
         # Refresh counters for every inform, independently of discovery's
@@ -911,18 +959,35 @@ class OPNSenseCollector(FreeBSDCollector):
                 self.sample_traffic(elapsed)
             except Exception as e:  # never let the sampler die
                 logger.debug('Traffic sample failed: %s', e)
-            if self.dpi:
-                try:
-                    self.dpi.exclude_macs(self.data.get('macs', {}).values())
-                    self.dpi.poll()
-                except Exception as e:
-                    logger.debug('Zenarmor DPI poll failed: %s', e)
+            if self.dpi and not isinstance(self.dpi, NtopngDPI):
+                self._poll_dpi()
             if self.api and self._bool('flows'):
                 try:
                     self._firewall_log().poll()
                 except Exception as e:
                     logger.debug('Firewall log poll failed: %s', e)
             time.sleep(max(1, interval - (time.time() - started)))
+
+    def _poll_dpi(self):
+        try:
+            self.dpi.exclude_macs(self.data.get('macs', {}).values())
+            self.dpi.poll()
+        except Exception as e:
+            logger.debug('DPI poll failed: %s', e)
+
+    def _ensure_dpi_poller(self):
+        """ntopng serves live flows, so poll it at the inform cadence rather
+        than with the slower traffic sampler."""
+        if not isinstance(self.dpi, NtopngDPI) or (
+                getattr(self, '_dpi_thread', None) and self._dpi_thread.is_alive()):
+            return
+        def loop():
+            while True:
+                started = time.time()
+                self._poll_dpi()
+                time.sleep(max(1, NTOPNG_POLL_INTERVAL - (time.time() - started)))
+        self._dpi_thread = threading.Thread(target=loop, daemon=True, name='ntopng-dpi')
+        self._dpi_thread.start()
 
     def sample_traffic(self, elapsed):
         """Fold Netflow observations, otherwise estimate from iftop samples."""
