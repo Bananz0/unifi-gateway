@@ -184,6 +184,10 @@ the controller pushed).
 - **Speed test:** dispatched; OPNsense's plugin answering `version: none`
   (no backend installed) is now reported as unhandled so the gateway falls
   back to its own test.
+- **DPI with real traffic:** with a snapshot of the router's Zenarmor
+  database refreshed every two minutes, the first five-minute window held
+  per-app DPI for 10 real clients in `stat/report/5minutes.user`
+  (e.g. DNS `61_9`, `109_9`, unidentified).
 - **Mirror on a UXG site:** rule numbers start at 20000 (else
   `FirewallRuleIndexOutOfRange`) and skip indexes used by rules made in UniFi
   (else `FirewallRuleIndexExisted`).
