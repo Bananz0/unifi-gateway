@@ -114,8 +114,12 @@ live test adoption in a lab controller:
 - **Region Blocking** (`usg_geo.ip_filtering` in the controller) is pushed as
   UDAPI `services.geoipFiltering {enabled, action: block|allow, countryList,
   direction: both|ingress|egress, interfaces}` and translated to a `ufg_geoip`
-  GeoIP alias with WAN in/out block rules. The UXG only advertises it
-  (`usg_caps` 0x40) once OPNsense has a GeoIP source (MaxMind URL) configured.
+  GeoIP alias with WAN in/out block rules. Without a MaxMind source it falls
+  back to per-country URL Table aliases (ipdeny.com aggregated zones, refreshed
+  daily by OPNsense) nested in `ufg_geoip`, so the UXG always advertises it
+  (`usg_caps` 0x40). Verified end to end in production on 2026-10-20: enabling KP
+  in UniFi loaded 175.45.176.0/22 into pf and added the WAN in/out blocks;
+  disabling removed them.
 - **triggerTag:** with trigger logs on, every user rule and port forward
   carries `triggerTag {id, type}` (its UniFi policy). The translator accepts it,
   and firewall-log hits on pushed rules are attributed to that policy.
