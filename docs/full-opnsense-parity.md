@@ -23,7 +23,7 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 | Dynamic DNS | Account status reads exist; account/provider configuration is missing. | Translate supported providers, credentials and check-IP methods, trigger update and verify published IPv4/IPv6 record and error status. |
 | WAN failover / balancing | Missing. | Gateways/groups, health checks, policy routing, failover and recovery on isolated WANs. |
 | Firewall / NAT | Substantial UDAPI translator exists, with skipped-match protection. Not every policy type is supported. | Both address families, local/forward direction, sets, states, zones, hairpin/SNAT and policy restrictions; packet-level permit/deny tests. |
-| Application blocking | Zenarmor DPI telemetry is read-only and does not enforce UniFi app blocks. Exact-name ID resolution and explicit Zenarmor policy app-delta writes with readback now exist as primitives; automatic UniFi rule/scope translation remains missing. | Capture `v2/firewall-app-blocks`, traffic rules and app-aware firewall policies; preserve scope, schedules, ownership and manual app controls; test actual denied traffic and unblock recovery. |
+| Application blocking | Simple app-ID blocks now reconcile via a separate worker into tagged Zenarmor policies for MACs or IPv4 subnets, with ALWAYS schedules. Configure-disabled/readback/activate, ownership, cleanup, inheritance guards and rejection backoff are implemented. Installed API accepted Instagram and a test MAC but rejected scoped activation with `Upgrade to premium`. | Successful licensed activation and actual denied traffic/unblock recovery; categories, schedules, mixed/overlapping scopes, IPv6 interface scopes, custom-policy inheritance and app-aware traffic/firewall-policy sources remain incomplete. |
 | DNS / mDNS / services | Host records exist; full resolver/forwarder/mDNS/NTP/LLDP configuration is incomplete. | Service-specific writes, reloads and observed behavior; preserve current AdGuard/Unbound/Dnsmasq chain. |
 | Insights / Flows | DPI, country accounting, Netflow totals, allowed connections and firewall triggers exist in the baseline. | Counter reconciliation, attribution, restarts, retention, interface mapping and UI/API validation. |
 | Internet Quality | dpinger latency/loss now populate `uptime_stats`; WAN Insights overview and latency history confirmed on production Network 10.6. | Outage/recovery packet-level exercise and additional WANs; duration starts with actual collector observations. No historical backfill. |
@@ -93,15 +93,29 @@ are independent and must be mapped rather than copied. This establishes that
 Instagram was not configured to be blocked; it does not explain why the user's
 attempt did not leave a saved controller rule.
 
-The new API primitive uses the installed plugin's PUT `appControls` operation,
+The API primitive uses the installed plugin's PUT `appControls` operation,
 updates explicit apps only, checks policy identity when requested, and reads the
-result back. Unit tests cover exact-name mapping, ambiguity rejection, manual
-block preservation, idempotence and failed/mismatched backend updates. It is not
-connected to automatic controller-rule enforcement or deployed to production.
-Device/network scope must come from the actual saved UniFi rule before applying
-a block. Additional Zenarmor policy activation is subject to the installed
-license checks; the bridge must not bypass them or widen a device-only block
-into the Default policy.
+result back. A separate worker now reconciles saved simple app blocks into
+clones of Default, using explicit MAC/subnet selectors. Default app controls are
+preserved; stale managed policies are removed after replacements activate.
+Unknown rule fields, schedules/categories without translators, mixed/overlapping
+scopes and IPv6 network scope are rejected before writes. Existing custom
+security policies prevent activation until policy inheritance can be resolved.
+If Default security controls change, an old clone is disabled rather than
+shadowing the new protections. Failed writes/activation retry after five minutes;
+changed rules and removal of all rules bypass the backoff.
+
+A real installed-plugin API exercise used MAC 52:54:00:26:07:02, confirmed absent
+from UniFi clients and the production ARP table. A consistent SQLite settings
+backup and Default policy snapshot were saved privately under
+`/root/unifi-app-control-backup-20261020-161245`. The API accepted app 10745 and
+the exact MAC selector, then rejected activation with `Upgrade to premium`.
+Readback showed the test policy disabled. Cleanup removed it, leaving zero
+managed app policies; Default's active state and app controls were preserved.
+This proves API translation and rejection handling, not successful enforcement.
+No actual user-device Instagram block was applied. Additional policy activation
+is subject to the installed license checks; the bridge must not bypass them or
+widen a device-only block into the global Default policy.
 
 ## Throughput and quality verification, 2026-10-20
 

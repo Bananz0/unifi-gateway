@@ -40,6 +40,7 @@ from .opnsense_ports import discover_ports
 from .opnsense_quality import WanQuality
 from .client_traffic import ClientTraffic
 from .unifi_mirror import OPNsenseMirror, UniFiController
+from .opnsense_appblocks import SimpleAppBlockSync
 
 logger = logging.getLogger('unifi-gateway')
 
@@ -76,6 +77,7 @@ UNIFI_SECTION = 'unifi'
 UNIFI_DEFAULTS = {
     'url': '', 'username': '', 'password': '', 'site': 'default',
     'verify_ssl': 'false', 'mirror': 'true', 'mirror_interval': '300',
+    'app_control': 'true', 'app_control_interval': '30',
 }
 
 
@@ -124,6 +126,8 @@ class OPNSenseCollector(FreeBSDCollector):
                 self._traffic_source = 'netflow-buckets'
         self.mirror = None
         self._mirror_thread = None
+        self.appcontrol = None
+        self._appcontrol_thread = None
         self.fwlog = None
         self._policy_cache = (0, {})
         self._trigger_tags = {}
@@ -185,18 +189,24 @@ class OPNSenseCollector(FreeBSDCollector):
                          if config.has_option(UNIFI_SECTION, k)})
         self.unifi_opts = opts
         enabled = str(opts['mirror']).lower() in ('1', 'true', 'yes', 'on')
-        if not (self.api and enabled and opts['username'] and opts['password']):
+        app_enabled = str(opts['app_control']).lower() in ('1', 'true', 'yes', 'on')
+        if not (self.api and (enabled or app_enabled) and opts['username'] and opts['password']):
             return
         url = opts['url'] or self._controller_url(config)
         if not url:
             logger.warning('UniFi mirror: set [unifi] url to enable it')
             return
-        controller = UniFiController(
-            url, opts['username'], opts['password'], site=opts['site'],
-            verify_ssl=str(opts['verify_ssl']).lower() in ('1', 'true', 'yes'))
-        self.mirror = OPNsenseMirror(self.api, controller, self.lan_identifiers,
-                                     self.wan_identifiers)
-        logger.info('Mirroring OPNsense config into the UniFi controller at %s', url)
+        def controller():
+            # Independent sessions avoid sharing cookies/token refresh across
+            # mirror and enforcement threads.
+            return UniFiController(url, opts['username'], opts['password'], site=opts['site'],
+                verify_ssl=str(opts['verify_ssl']).lower() in ('1', 'true', 'yes'))
+        if enabled:
+            self.mirror = OPNsenseMirror(self.api, controller(), self.lan_identifiers,
+                                         self.wan_identifiers)
+            logger.info('Mirroring OPNsense config into the UniFi controller at %s', url)
+        if app_enabled:
+            self.appcontrol = SimpleAppBlockSync(self.api, controller())
 
     def _firewall_log(self):
         if self.fwlog is None:
@@ -248,6 +258,33 @@ class OPNSenseCollector(FreeBSDCollector):
             target=self._mirror_loop, args=(int(self.unifi_opts['mirror_interval']),),
             daemon=True, name='unifi-mirror')
         self._mirror_thread.start()
+
+    def _ensure_app_control(self):
+        if not self.appcontrol or (self._appcontrol_thread and self._appcontrol_thread.is_alive()):
+            return
+        self._appcontrol_thread = threading.Thread(target=self._app_control_loop,
+            args=(int(self.unifi_opts['app_control_interval']),), daemon=True,
+            name='unifi-app-control')
+        self._appcontrol_thread.start()
+
+    def _app_control_loop(self, interval):
+        previous = None
+        while True:
+            try:
+                summary = self.appcontrol.run()
+                # Configured is intentionally distinct from observed packet
+                # enforcement, which requires classified connection evidence.
+                status = dict(summary, status='configured')
+            except Exception as e:
+                status = {'status': 'error', 'error': str(e)}
+            self.data['app_control'] = status
+            if status != previous:
+                if status['status'] == 'error':
+                    logger.warning('UniFi app control: %s', status['error'])
+                else:
+                    logger.info('UniFi app control: %s', json.dumps(status))
+                previous = status
+            time.sleep(max(15, interval))
 
     def _mirror_loop(self, interval):
         last_warnings = None
@@ -351,6 +388,7 @@ class OPNSenseCollector(FreeBSDCollector):
             return
         self._ensure_traffic_sampler()
         self._ensure_mirror()
+        self._ensure_app_control()
         # Refresh counters for every inform, independently of discovery's
         # cached API reads (the base class otherwise refreshes hosts at 120s).
         self.data['host_table'] = self._build_host_table()

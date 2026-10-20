@@ -208,6 +208,24 @@ api_secret = ...
 
 **DPI / Insights:** if Zenarmor is installed, per-client application stats are read from its reporting database (`dpi = auto`, `zenarmor_db` in `[opnsense]`). Reports include the legacy USG fields and the modern `dpi_stats` format with camel-case counters, and they are confirmed in the saved client reports on Network 10.6 for both UXG-Max and USG emulation.
 
+**Application blocking:** with a local controller account in `[unifi]`, a separate
+worker reads `v2/firewall-app-blocks` every 30 seconds (`app_control = true`,
+`app_control_interval = 30`). Explicit application-ID blocks with an ALWAYS
+schedule translate into tagged Zenarmor policies for the selected device MACs
+or IPv4 LAN subnets. Policies inherit Default's security controls, are configured
+while disabled, and activate only after app/selector readback. Removing the
+controller rule removes its managed policies. Set `app_control = false` to stop
+reconciliation; remove rules first if existing blocks should also be removed.
+This worker is independent of `mirror = false` and does not run inside informs.
+
+Scoped policy activation requires an appropriate Zenarmor license. The installed
+free backend rejects activation with `Upgrade to premium`; the bridge reports
+this and leaves the policy disabled. It never applies a device-only rule to the
+global Default policy as a fallback. Category blocks, custom schedules, mixed
+device/network scopes, overlapping subnets, dynamic IPv6 scope and existing
+custom-policy inheritance remain unsupported and produce explicit errors.
+Configuration readback alone does not prove that client packets were blocked.
+
 **Traffic Flows (UXG mode):** with `device = UXGB` and `flows = true` in `[opnsense]`, every finished, allowed Zenarmor connection is sent in the inform's `connections` list. The controller stores it as a Traffic Flow (client, domain, port, networks, country, bytes). This was verified on a Cloud Key running Network 10.6 without RabbitMQ. Blocked connections are not sent, because this path records every entry as allowed. See [UXG findings](docs/uxg-emulation.md).
 
 Zenarmor reports include per-application country byte totals where geography is
