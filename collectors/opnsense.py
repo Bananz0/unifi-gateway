@@ -93,8 +93,10 @@ UNIFI_DEFAULTS = {
     'app_control_backend': 'zenarmor',
 }
 NTOPNG_SECTION = 'ntopng'
-NTOPNG_POLL_INTERVAL = 10
-NTOPNG_DEFAULTS = {'url': 'http://127.0.0.1:3001', 'username': '', 'password': ''}
+# interval: each poll lists every live flow, which costs ntopng ~6 CPU-seconds
+# on ~2-3k flows; ntopng keeps finished flows listed ~1 min, so 30 s misses none
+NTOPNG_DEFAULTS = {'url': 'http://127.0.0.1:3001', 'username': '', 'password': '',
+                   'interval': '30'}
 ADGUARD_SECTION = 'adguard'
 ADGUARD_DEFAULTS = {'url': 'http://127.0.0.1:3000', 'username': '', 'password': ''}
 
@@ -161,6 +163,7 @@ class OPNSenseCollector(FreeBSDCollector):
                 state_file=os.path.join(os.path.dirname(self._state_path()), 'ntopng-dpi.json'))
             if dpi.available:
                 self.dpi = dpi
+                self._ntopng_interval = ntop['interval']
                 dpi.flows = self._bool('flows')
                 logger.info('Reporting DPI statistics%s from ntopng (%s)',
                             ' and Traffic Flows' if dpi.flows else '', ntop['url'])
@@ -976,16 +979,17 @@ class OPNSenseCollector(FreeBSDCollector):
             logger.debug('DPI poll failed: %s', e)
 
     def _ensure_dpi_poller(self):
-        """ntopng serves live flows, so poll it at the inform cadence rather
-        than with the slower traffic sampler."""
+        """ntopng serves live flows; poll them on their own cadence
+        ([ntopng] interval) rather than with the traffic sampler."""
         if not isinstance(self.dpi, NtopngDPI) or (
                 getattr(self, '_dpi_thread', None) and self._dpi_thread.is_alive()):
             return
+        interval = max(10, int(self._ntopng_interval))
         def loop():
             while True:
                 started = time.time()
                 self._poll_dpi()
-                time.sleep(max(1, NTOPNG_POLL_INTERVAL - (time.time() - started)))
+                time.sleep(max(1, interval - (time.time() - started)))
         self._dpi_thread = threading.Thread(target=loop, daemon=True, name='ntopng-dpi')
         self._dpi_thread.start()
 
