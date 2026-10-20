@@ -43,6 +43,7 @@ from .opnsense_wireguard_sync import RULE_PREFIX as WIREGUARD_RULES, WireGuardSy
 from .opnsense_ddns import sync_ddns
 from .opnsense_failover import FailoverSync, plan_failover
 from .opnsense_macclone import MACOverrideSync, plan_overrides
+from .opnsense_port_toggle import PortToggleSync
 from .opnsense_shaper import sync_shaper
 from .opnsense_sync import (
     ALIAS_PREFIX, ALIASES, BLOCK_RULE_KEY, BLOCKED_IP_ALIAS, BLOCKED_MAC_ALIAS, DNAT_RULES,
@@ -295,7 +296,8 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         summary['aliases'] = len(used_aliases)
 
         services = udapi.get('services') or {}
-        if self._enabled('apply_dhcp') and 'dhcpServers' in services:
+        if (self._enabled('apply_dhcp') and self._enabled('apply_dhcp_pools')
+                and 'dhcpServers' in services):
             servers = services['dhcpServers'] or []
             # Older provisioning captures contain reservations only. Those
             # are not authoritative pool declarations.
@@ -348,6 +350,17 @@ class UDAPIConfigSync(OPNsenseConfigSync):
                 translated.update(paths)
             except (OPNsenseAPIError, ValueError) as e:
                 self._warn('%s not applied: %s', name, e)
+        if self.options.get('apply_port_toggle', False) and 'interfaces' in udapi:
+            try:
+                toggled = PortToggleSync(
+                    self.api, self.port_map, self.options['port_state_file'],
+                    self.options.get('protected_hosts', ())).sync(
+                    udapi['interfaces'], lambda message: self._warn('%s', message))
+                if toggled:
+                    summary['ports_toggled'] = toggled
+                translated.add('interfaces/*/status')
+            except (OPNsenseAPIError, ValueError, KeyError) as e:
+                self._warn('port enable/disable not applied: %s', e)
         if self.options.get('apply_wan_failover', False):
             try:
                 summary['failover_wans'] = FailoverSync(

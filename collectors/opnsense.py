@@ -18,6 +18,7 @@ of breaking informs.
 """
 import calendar
 import ast
+from urllib.parse import urlparse
 import hashlib
 import json
 import logging
@@ -64,6 +65,8 @@ DEFAULTS = {
     'apply_shaper': 'false',
     'apply_mac_override': 'false',
     'apply_wan_failover': 'false',
+    'apply_port_toggle': 'true',
+    'apply_dhcp_pools': 'true',
     'ips': 'false',
     'block_clients': 'true',
     'allow_reboot': 'false',
@@ -160,10 +163,16 @@ class OPNSenseCollector(FreeBSDCollector):
                 'apply_firewall', 'apply_port_forward', 'apply_dhcp',
                 'apply_dns', 'apply_routes', 'apply_ids', 'apply_interfaces',
                 'apply_vpn', 'apply_ddns', 'apply_shaper', 'apply_mac_override',
-                'apply_wan_failover')}
+                'apply_wan_failover', 'apply_port_toggle', 'apply_dhcp_pools')}
             state_dir = os.path.dirname(self._state_path())
             options['mac_state_file'] = os.path.join(state_dir, 'mac-override.json')
             options['failover_state_file'] = os.path.join(state_dir, 'wan-failover.json')
+            options['port_state_file'] = os.path.join(state_dir, 'port-states.json')
+            # never disable the interface the controller is reached through
+            options['protected_hosts'] = tuple(sorted({
+                urlparse(config.get(section, key, fallback='')).hostname
+                for section, key in (('gateway', 'url'), ('provisioned', 'mgmt_url'))
+            } - {None, ''}))
             self.sync = OPNsenseConfigSync(
                 self.api, self.port_identifier, self.lan_identifiers,
                 options=options)

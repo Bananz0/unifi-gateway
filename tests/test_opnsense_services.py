@@ -341,3 +341,74 @@ def test_ambiguous_gateways_reject(tmp_path):
     with pytest.raises(ValueError, match='exactly one'):
         FailoverSync(api, str(tmp_path / 'f.json')).sync({'wan': {'priority': '1'}})
     assert api.posts == []
+
+
+# ── Ethernet port enable/disable ─────────────────────────────────────────
+
+from collectors.opnsense_port_toggle import PortToggleSync  # noqa: E402
+
+
+class PortAPI(ServicesAPI):
+    def __init__(self):
+        super().__init__()
+        rows = self.store['interfaces/assignment/search_item']
+        for row in rows.values():
+            row['enable'] = '1'
+        rows['opt3-uuid'] = {'identifier': 'opt3', 'enable': '1', 'spoofmac': ''}
+        self.gets['interfaces/overview/interfaces_info'] = {'rows': [
+            {'identifier': 'lan', 'addr4': '10.20.0.1/24'},
+            {'identifier': 'wan', 'addr4': '198.51.100.2/24'},
+            {'identifier': 'opt3', 'addr4': ''}]}
+
+
+def ports(**enabled):
+    return [{'identification': {'id': port, 'type': 'ethernet'}, 'status': {'enabled': on}}
+            for port, on in enabled.items()]
+
+
+def toggler(api, tmp_path):
+    return PortToggleSync(api, {'eth0': 'lan', 'eth4': 'wan', 'eth3': 'opt3'}.get,
+                          str(tmp_path / 'ports.json'), protected_hosts=('10.20.0.5',))
+
+
+def test_first_push_only_records_port_states(tmp_path):
+    api = PortAPI()
+    sync = toggler(api, tmp_path)
+    assert sync.sync(ports(eth0=True, eth4=True, eth3=False), print) == {}
+    assert api.posts == []
+    assert api.store['interfaces/assignment/search_item']['opt3-uuid']['enable'] == '1'
+
+
+def test_toggling_a_port_disables_and_reenables_its_interface(tmp_path):
+    api = PortAPI()
+    sync = toggler(api, tmp_path)
+    rows = api.store['interfaces/assignment/search_item']
+    sync.sync(ports(eth0=True, eth4=True, eth3=True), print)
+    assert sync.sync(ports(eth0=True, eth4=True, eth3=False), print) == {'opt3': False}
+    assert rows['opt3-uuid']['enable'] == '0'
+    api.posts.clear()
+    sync.sync(ports(eth0=True, eth4=True, eth3=False), print)
+    assert api.posts == []
+    assert sync.sync(ports(eth0=True, eth4=True, eth3=True), print) == {'opt3': True}
+    assert rows['opt3-uuid']['enable'] == '1'
+
+
+def test_controller_interface_is_never_disabled(tmp_path):
+    api = PortAPI()
+    sync = toggler(api, tmp_path)
+    warnings = []
+    sync.sync(ports(eth0=True), warnings.append)
+    assert sync.sync(ports(eth0=False), warnings.append) == {}
+    assert api.store['interfaces/assignment/search_item']['lan-uuid']['enable'] == '1'
+    assert any('controller' in w for w in warnings)
+
+
+def test_failed_apply_retries_the_toggle(tmp_path):
+    api = PortAPI()
+    sync = toggler(api, tmp_path)
+    sync.sync(ports(eth3=True), print)
+    api.gets['interfaces/assignment/pending'] = {'status': 'pending'}
+    with pytest.raises(Exception):
+        sync.sync(ports(eth3=False), print)
+    api.gets['interfaces/assignment/pending'] = {'status': 'ok'}
+    assert sync.sync(ports(eth3=False), print) == {'opt3': False}
