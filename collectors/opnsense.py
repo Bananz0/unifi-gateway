@@ -233,9 +233,21 @@ class OPNSenseCollector(FreeBSDCollector):
         if self.mirror is None or time.time() - stamp < 300:
             return ids
         prefix = '[OPNsense] '
-        ids = {r['name'][len(prefix):].rstrip('*'): r['_id']
-               for r in self.mirror.ctl.call('GET', 'rest/firewallrule')
-               if str(r.get('name', '')).startswith(prefix)}
+        policies = self.mirror._zone_based_policies()
+        if policies is not None:
+            # zone-based site (Network 11): the mirrored rules are firewall
+            # policies; naming a missing legacy rule made the controller log
+            # a failed lookup per trigger and slowed its inform handling
+            ids = {}
+            for p in policies:
+                name = str(p.get('name', ''))
+                if name.startswith(prefix) and p.get('_id'):
+                    ids.setdefault(name[len(prefix):].rstrip('*'),
+                                   {'id': p['_id'], 'type': 'FIREWALL_POLICY'})
+        else:
+            ids = {r['name'][len(prefix):].rstrip('*'): r['_id']
+                   for r in self.mirror.ctl.call('GET', 'rest/firewallrule')
+                   if str(r.get('name', '')).startswith(prefix)}
         self._policy_cache = (time.time(), ids)
         return ids
 
