@@ -95,6 +95,8 @@ class FakeController:
             return [{'_id': 'lan-net', 'purpose': 'corporate', 'ip_subnet': '10.0.5.1/24'}]
         if path == 'stat/device':
             return [{'mac': 'd0:21:f9:72:bb:c4'}]
+        if path == 'v2/firewall-policies':
+            return copy.deepcopy(self.store.get('firewall-policies', []))
         if path.startswith('v2/content-filtering'):
             profiles = self.store.setdefault('content-filtering', [])
             if method == 'GET':
@@ -294,3 +296,15 @@ def test_http_success_with_controller_error_is_still_failure():
     import pytest
     with pytest.raises(UniFiAPIError, match='api.err.UnsupportedFeature'):
         ctl.call('POST', 'rest/firewallrule', {})
+
+
+def test_zone_based_site_skips_legacy_rules(mirror):
+    """Network 11 converts sites to zone-based policies; the legacy
+    firewallrule API then stores nothing, so the mirror leaves rules alone."""
+    mirror.ctl.store['firewall-policies'] = [
+        {'_id': 'p1', 'name': '[OPNsense] Default deny / state violation rule'},
+        {'_id': 'p2', 'name': '[OPNsense] Default deny / state violation rule'},
+        {'_id': 'p3', 'name': 'Allow Return Traffic', 'predefined': True}]
+    assert mirror.mirror_firewall_rules({}) == 1
+    assert mirror.ctl.store['firewallrule'] == []
+    assert not [w for w in mirror.ctl.writes if 'firewallrule' in w[1]]

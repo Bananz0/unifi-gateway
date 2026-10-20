@@ -415,7 +415,26 @@ class OPNsenseMirror:
             self._base = 20000 if types & {'uxg', 'udm'} else 2000
         return self._base
 
+    def _zone_based_policies(self):
+        """Firewall policies when the site uses the zone-based firewall
+        (Network 11 converts every site); None on a legacy-rules site."""
+        try:
+            policies = self.ctl.call('GET', 'v2/firewall-policies')
+        except UniFiAPIError:
+            return None
+        return policies if isinstance(policies, list) and policies else None
+
     def mirror_firewall_rules(self, aliases):
+        policies = self._zone_based_policies()
+        if policies is not None:
+            # the legacy firewallrule API stores nothing on a zone-based site;
+            # the upgrade already converted the mirrored rules to policies
+            names = {p.get('name') for p in policies if is_mirrored(p.get('name'))}
+            if not getattr(self, '_zbf_logged', False):
+                logger.info('UniFi mirror: zone-based firewall; %d [OPNsense] rules exist as '
+                            'policies, legacy rule mirroring skipped', len(names))
+                self._zbf_logged = True
+            return len(names)
         lan = set(self.lan_identifiers()) | {'LAN'}
         wan = set(self.wan_identifiers())
         overview = {r.get('identifier'): r.get('description') for r in
