@@ -58,3 +58,17 @@ def test_gcm_tamper_detected(config, backend):
     packet[-1] ^= 0xFF
     with pytest.raises(ValueError):
         unifi_protocol.decode_inform(config, bytes(packet))
+
+
+@pytest.mark.parametrize('gcm,flag', [('True', 0x08), ('False', 0)])
+def test_unadopted_inform_follows_gcm_setting(config, gcm, flag):
+    """A controller that saw this MAC use GCM rejects a later CBC inform as a
+    downgrade, even after the device was forgotten (seen re-adopting a USG
+    MAC as a UXG-Max)."""
+    config.set('gateway', 'is_adopted', 'False')
+    config.remove_option('gateway', 'key')
+    config.set('gateway', 'use_aes_gcm', gcm)
+    packet = unifi_protocol.encode_inform(config, json.dumps({'mac': 'aa:bb:cc:dd:ee:ff'}))
+    flags = int.from_bytes(packet[14:16], 'big')
+    assert flags & 0x08 == flag
+    assert unifi_protocol.decode_inform(config, packet)['mac'] == 'aa:bb:cc:dd:ee:ff'
