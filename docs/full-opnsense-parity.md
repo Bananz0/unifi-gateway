@@ -94,6 +94,34 @@ shifting the UniFi result three hours on the EAT router. It now treats a naive
 plugin date as UTC and honors explicit timezone offsets. This corrects the
 UniFi timestamp; the third-party plugin's own CSV storage is not rewritten.
 
+## Individual client speeds, 2026-10-20
+
+Network 10.6's UXG client path derives client rates from cumulative counter
+deltas; adding a rate field to a MAC-table row alone does not fix this. Netflow
+exports arrive in batches, so forwarding an identical total on each ten-second
+inform produced zero rates between batches. `ClientTraffic` now publishes each
+new confirmed batch gradually over 30-120 seconds (at least the configured
+traffic sampling interval). Publications never exceed the confirmed budget and
+eventually converge to it. They do not integrate iftop estimates into accounting.
+
+The source Netflow totals remain unchanged. Separate private publication state
+preserves released/pending budgets over restart, protects against source
+rollback/replay and explicitly rebaselines source epoch changes. The first
+publication epoch starts at zero rather than replaying old traffic. UXG MAC-table
+bytes/packets are sent in gateway perspective because the controller reverses
+them before applying client deltas. Other collectors' wire behavior is unchanged.
+
+These are delayed per-client average rates, including exporter delay and the
+publication window. They are not instantaneous radio speeds, Wi-Fi link rates,
+or traffic switched entirely within the LAN without crossing the gateway.
+
+Production client API readback showed nonzero rates for the iPhone and other
+active clients after rollout (19 of 28 in one snapshot). The zero-rate audit
+separated clients with no new confirmed traffic from MAC-only topology entries
+with no IP/gateway binding. Such entries cannot receive invented per-IP Internet
+accounting. A later snapshot identified two such MAC-only entries; client counts
+change as discovery updates. The UI itself was not visually verified.
+
 ## Later: OpenWrt AP emulation
 
 This is a separate daemon role per AP, with its own identity/adoption and radio

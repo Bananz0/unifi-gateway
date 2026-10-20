@@ -239,3 +239,17 @@ def test_quality_report_is_only_included_when_observed():
         'availability': 99, 'latency_average': 20}], 'uptime': 10}}
     assert inform(dc=DC(uptime_stats=observed))['uptime_stats'] == observed
     assert 'uptime_stats' not in inform()
+
+
+def test_opnsense_client_counters_use_gateway_wire_direction():
+    dc = DC()
+    host = dc.data['host_table'][0]
+    host.update(rx_bytes=30000, tx_bytes=3000, rx_packets=300, tx_packets=30,
+                _client_counter_view=True)
+    wire = next(p for p in inform(dc=dc)['port_table'] if p['port_idx'] == 2)['mac_table'][0]
+    assert (wire['rx_bytes'], wire['tx_bytes']) == (3000, 30000)
+    assert (wire['rx_packets'], wire['tx_packets']) == (30, 300)
+    assert '_client_counter_view' not in wire
+    # Network's gateway client adapter reverses these to client perspective.
+    assert wire['tx_bytes'] == host['rx_bytes']
+    assert wire['rx_bytes'] == host['tx_bytes']

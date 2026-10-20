@@ -38,6 +38,7 @@ from .opnsense_fwlog import FirewallLogTriggers
 from .netflow import NetflowTotals
 from .opnsense_ports import discover_ports
 from .opnsense_quality import WanQuality
+from .client_traffic import ClientTraffic
 from .unifi_mirror import OPNsenseMirror, UniFiController
 
 logger = logging.getLogger('unifi-gateway')
@@ -113,6 +114,9 @@ class OPNSenseCollector(FreeBSDCollector):
         self.dpi = None
         self.netflow = None
         self._traffic_source = None
+        self._client_traffic = ClientTraffic(
+            os.path.join(os.path.dirname(self._state_path()), 'client-traffic.json'),
+            interval=max(10, int(self.opts['traffic_interval'])))
         if os.path.isfile(self.opts['netflow_db']):
             self.netflow = NetflowTotals(self.opts['netflow_db'],
                 state_file=os.path.join(os.path.dirname(self._state_path()), 'netflow-accounting.json'))
@@ -754,12 +758,16 @@ class OPNSenseCollector(FreeBSDCollector):
         with self._traffic_lock:
             traffic = {ip: dict(c) for ip, c in self._host_traffic.items()}
         use_netflow = self.netflow and self._traffic_source == 'netflow-buckets'
+        paced = use_netflow and self.config.get('gateway', 'device', fallback='').upper().startswith('UXG')
         by_mac = self.netflow.snapshot() if use_netflow else {}
         hosts = []
         for entry in self._get_neighbors_raw():
             mac = entry['mac']
             first = self._host_seen.setdefault(mac, now)
             counters = by_mac.get(mac, {}) if use_netflow else traffic.get(entry['ip'], {})
+            if paced:
+                counters = self._client_traffic.counters(mac, counters,
+                    epoch=str(self.netflow.initialized))
             host = {
                 'mac': mac,
                 'ip': entry['ip'],
@@ -773,6 +781,8 @@ class OPNSenseCollector(FreeBSDCollector):
                 'bc_bytes': 0,
                 'mc_bytes': 0,
             }
+            if paced:
+                host['_client_counter_view'] = True
             if entry.get('hostname'):
                 host['hostname'] = entry['hostname']
             if entry.get('realif'):
@@ -780,6 +790,11 @@ class OPNSenseCollector(FreeBSDCollector):
             if entry.get('oui'):
                 host['oui'] = entry['oui']
             hosts.append(host)
+        if paced:
+            try:
+                self._client_traffic.save()
+            except OSError as e:
+                logger.warning('Could not checkpoint client traffic publication: %s', e)
         return hosts
 
     # ── Per-client traffic sampling ──────────────────────────────────────

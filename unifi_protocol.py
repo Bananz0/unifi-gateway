@@ -395,7 +395,13 @@ def _uxg_port_table(config, dc, ports, primary_lan):
         if port['type'].lower().startswith('wan'):
             entry['is_uplink'] = True
         for host in hosts.get(ifname, []):
-            row = {k: v for k, v in host.items() if k not in ('realif', 'oui')}
+            row = {k: v for k, v in host.items() if k not in ('realif', 'oui', '_client_counter_view')}
+            if host.get('_client_counter_view'):
+                # UXG host counters are gateway-relative. Network reverses
+                # them before applying deltas to the client's counters.
+                for suffix in ('bytes', 'packets'):
+                    row['rx_' + suffix], row['tx_' + suffix] = (
+                        host.get('tx_' + suffix, 0), host.get('rx_' + suffix, 0))
             row.setdefault('age', 0)
             row['static'] = False
             row['vlan'] = int(port.get('vlan', 1))

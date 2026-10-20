@@ -221,6 +221,13 @@ replaying old history. Netflow totals follow observed interface/IP/MAC ownership
 ambiguous address-change buckets remain unattributed. Client counters refresh
 each inform and clients are assigned to their observed LAN.
 
+For OPNsense UXG mode, per-client speeds are delayed averages of confirmed
+Netflow bytes. A separate persistent publication ledger releases export batches
+over 30-120 seconds (at least `traffic_interval`) so the controller's counter
+deltas do not repeatedly display zero between exports. This adds to the
+exporter's own reporting delay; it is not instantaneous packet or Wi-Fi link
+speed. It does not estimate extra byte totals or replay pre-installation history.
+
 **Running from source on OPNsense:** OPNsense doesn't ship psutil or pycryptodome, and neither is required here — the inform encryption falls back to the `cryptography` package OPNsense already includes, and host stats come from the API. Copy the sources to e.g. `/usr/local/lib/unifi-gateway` and run `python3 unifi_gateway.py run`.
 
 DNS host overrides are created with a 60 s TTL. If AdGuard Home sits in front of Unbound with optimistic caching on, it can still serve a removed record for up to `cache_optimistic_max_age`.
