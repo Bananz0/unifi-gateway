@@ -61,8 +61,31 @@ SET_ALIAS_TYPES = {'address': None, 'mac': 'mac', 'port': 'port'}
 
 RULE_KEYS = {'id', 'description', 'enabled', 'disabled', 'target', 'ipVersion',
              'protocol', 'source', 'destination', 'log', 'inInterface',
-             'outInterface', 'states', 'connectionStates'}
-NAT_KEYS = RULE_KEYS | {'translation'}
+             'outInterface', 'states', 'connectionStates', 'connectionState',
+             'icmpType', 'icmpv6Type'}
+NAT_KEYS = RULE_KEYS | {'translation', 'chain'}
+
+# Network 10.6 matches "this interface's address/subnet" with virtual sets
+# named after the UDAPI interface (ADDRv4_eth4, NETv4_br0) that are not
+# declared in firewall/sets.
+INTERFACE_SET = re.compile(r'^(ADDR|NET)v([46])_(.+)$')
+
+# UDAPI ICMP type names -> OPNsense filter icmptype / icmp6type values
+ICMP_TYPES = {
+    'echo-request': 'echoreq', 'echo-reply': 'echorep',
+    'destination-unreachable': 'unreach', 'time-exceeded': 'timex',
+    'parameter-problem': 'paramprob', 'redirect': 'redir',
+    'router-advertisement': 'routeradv', 'router-solicitation': 'routersol',
+    'source-quench': 'squench', 'timestamp-request': 'timereq',
+    'timestamp-reply': 'timerep',
+}
+ICMP6_TYPES = {
+    'echo-request': 'echoreq', 'echo-reply': 'echorep',
+    'destination-unreachable': 'unreach', 'packet-too-big': 'toobig',
+    'time-exceeded': 'timex', 'parameter-problem': 'paramprob',
+    'neighbor-solicitation': 'neighbrsol', 'neighbor-advertisement': 'neighbradv',
+    'router-solicitation': 'routersol', 'router-advertisement': 'routeradv',
+}
 ENDPOINT_KEYS = {'address', 'addresses', 'sets', 'port', 'ports', 'mac',
                  'macAddress', 'negate', 'invert'}
 
@@ -81,8 +104,15 @@ SKIP_HOST_RECORDS = {'setup.ui.com', 'setup.ubnt.com'}
 RULESET_PREFIX = re.compile(r'^\[[A-Z]+(?:v6)?_(?:IN|OUT|LOCAL)\]\s*')
 
 
+# Network 10.6 names port-forward NAT entries after the forward:
+# "PortForward DNAT [<name>]" / "PortForward MASQUERADE [<name>]".
+PORT_FORWARD_NAME = re.compile(r'^PortForward \w+ \[(.*)\]$')
+
+
 def _mirrored(rule):
-    return is_mirrored(RULESET_PREFIX.sub('', str(rule.get('description') or '')))
+    description = RULESET_PREFIX.sub('', str(rule.get('description') or ''))
+    forward = PORT_FORWARD_NAME.match(description)
+    return is_mirrored(forward.group(1) if forward else description)
 
 
 def is_udapi_config(cfg):
@@ -340,6 +370,13 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         for set_name in _as_list(side.get('sets')):
             if set_name.startswith('!'):
                 negate, set_name = True, set_name[1:]
+            iface = INTERFACE_SET.match(set_name)
+            if iface:
+                opn_if = self.resolve_interface(iface.group(3))
+                if not opn_if:
+                    raise ValueError('interface set %s is not mapped' % set_name)
+                networks.append(opn_if + 'ip' if iface.group(1) == 'ADDR' else opn_if)
+                continue
             aname, alias_type = self._set_alias(sets, set_name, aliases)
             if alias_type == 'port':
                 if port:
@@ -371,8 +408,21 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         return PROTOCOLS.get(value, value.upper())
 
     @staticmethod
+    def _icmp_type(rule, protocol):
+        """OPNsense icmptype/icmp6type fields for a rule's ICMP type match."""
+        for field, table, target in (('icmpType', ICMP_TYPES, 'icmptype'),
+                                     ('icmpv6Type', ICMP6_TYPES, 'icmp6type')):
+            value = str(rule.get(field) or '').lower()
+            if value in ('', 'any'):
+                continue
+            if value not in table:
+                raise ValueError('unsupported %s %s' % (field, value))
+            return {target: table[value]}
+        return {}
+
+    @staticmethod
     def _check_states(rule):
-        states = rule.get('states', rule.get('connectionStates'))
+        states = rule.get('states', rule.get('connectionStates', rule.get('connectionState')))
         if states is None:
             return
         states = [str(s).lower() for s in _as_list(states)]
@@ -468,6 +518,7 @@ class UDAPIConfigSync(OPNsenseConfigSync):
             raise ValueError('unsupported ipVersion %s' % rule.get('ipVersion'))
         protocol = self._protocol(rule)
         self._check_states(rule)
+        icmp = self._icmp_type(rule, protocol)
         num = int(rule['id'])
         if not 0 < num <= MAX_SEQUENCE:
             raise ValueError('rule id %s out of sequence range' % num)
@@ -503,6 +554,7 @@ class UDAPIConfigSync(OPNsenseConfigSync):
             'destination_not': '1' if dst_not else '0',
             'destination_port': dst_port,
             'log': '1' if rule.get('log') else '0',
+            **icmp,
             'sequence': str(num),
             'description': make_tag(key, rule.get('description', '')),
         }
@@ -511,8 +563,9 @@ class UDAPIConfigSync(OPNsenseConfigSync):
 
     def _translate_nat(self, section, sets):
         forwards, aliases, failed = {}, {}, set()
-        for chain, chain_rules in _chains(section):
+        for chain_name, chain_rules in _chains(section):
             for rule in chain_rules:
+                chain = chain_name or rule.get('chain', '')
                 if str(rule.get('target', '')).upper() != 'DNAT':
                     continue  # masquerade / SNAT: OPNsense outbound NAT
                 if _mirrored(rule):
@@ -540,6 +593,17 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         if rule.get('outInterface'):
             raise ValueError('outInterface on DNAT')
         wan = _ref_id(rule.get('inInterface'))
+        destination = dict(rule.get('destination') or {})
+        dst_sets = _as_list(destination.get('sets'))
+        wan_sets = [s for s in dst_sets if INTERFACE_SET.match(s)
+                    and INTERFACE_SET.match(s).group(1) == 'ADDR']
+        if wan_sets:
+            # "destination = this interface's address" is how 10.6 names the WAN
+            if not wan:
+                wan = INTERFACE_SET.match(wan_sets[0]).group(3)
+            destination['sets'] = [s for s in dst_sets if s not in wan_sets]
+            if not destination['sets']:
+                del destination['sets']
         opn_if = self.resolve_interface(wan)
         if not opn_if:
             raise ValueError('WAN %s is not mapped' % wan)
@@ -561,7 +625,7 @@ class UDAPIConfigSync(OPNsenseConfigSync):
         if src_port:
             raise ValueError('source port match')
         dst_net, dst_not, dst_port = self._udapi_endpoint(
-            rule.get('destination'), key + '_dst', sets, aliases)
+            destination, key + '_dst', sets, aliases)
         if dst_not:
             raise ValueError('negated destination')
         local_port = self._port_text(translation.get('port', '')).replace(':', '-')

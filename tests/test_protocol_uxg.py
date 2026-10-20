@@ -106,7 +106,8 @@ class TestPayload:
 
     def test_port_table_carries_clients(self):
         ports = {p['ifname']: p for p in inform()['port_table']}
-        assert [p['port_idx'] for p in ports.values()] == [1, 2, 3]
+        # front-panel numbering, as the controller seeds a UXG-Max: ethN = port N+1
+        assert {name: p['port_idx'] for name, p in ports.items()} == {'eth4': 5, 'eth1': 2, 'eth2': 3}
         wan = ports['eth4']
         assert wan['is_uplink'] is True and wan['mac_table'] == []
         lan = ports['eth1']

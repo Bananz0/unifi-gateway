@@ -203,3 +203,18 @@ class TestMirror:
         summary = mirror.run()
         assert '[OPNsense] Torrent' in by_name(mirror.ctl, 'portforward')
         assert any('api.err.Something' in w for w in summary['warnings'])
+
+
+def test_rule_numbers_follow_gateway_type(mirror):
+    """UniFi OS gateways only accept user rules from 20000 upwards."""
+    real = mirror.ctl.call
+
+    def call(method, path, payload=None):
+        if path == 'stat/device':
+            return [{'mac': 'd0:21:f9:72:bb:c4', 'type': 'usw'}, {'mac': '74:ac:b9:5e:00:01', 'type': 'uxg'}]
+        return real(method, path, payload)
+
+    mirror.ctl.call = call
+    mirror.run()
+    indexes = sorted(r['rule_index'] for r in mirror.ctl.store['firewallrule'])
+    assert indexes[0] == 20000 and all(i >= 20000 for i in indexes)

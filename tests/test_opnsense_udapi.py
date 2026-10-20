@@ -319,3 +319,71 @@ class TestSyntheticServices:
         sync.apply_system_cfg(cfg)
         assert api.search(ROUTES.search) == []
         assert api.search(KEA_RESERVATIONS.search) == []
+
+
+# A real Network 10.6.106 capture with a WAN network and user objects (lab,
+# secrets and the operator's own data removed): port forwards are flat NAT
+# entries carrying their chain, with the WAN given as the ADDRv4_eth4 set.
+WAN_CAPTURE = load('uxg_setparam_10.6.106_objects.json')
+
+
+@pytest.fixture
+def wan_api():
+    api = FakeAPI()
+    api.gets['interfaces/overview/interfaces_info'] = [
+        {'identifier': 'lan', 'ipv4': [{'ipaddr': '10.0.5.1/24'}]},
+        {'identifier': 'wan', 'ipv4': [{'ipaddr': '203.0.113.2/24'}]},
+    ]
+    api.gets['unbound/settings/get'] = {'unbound': {'general': {'enabled': '1'}}}
+    api.gets['kea/dhcpv4/get'] = {'dhcpv4': {'general': {'enabled': '1'}}}
+    api.gets['kea/dhcpv4/search_subnet'] = [{'uuid': 'sub-1', 'subnet': '10.0.5.0/24'}]
+    return api
+
+
+@pytest.fixture
+def wan_sync(wan_api):
+    return UDAPIConfigSync(wan_api, {'eth4': 'wan', 'eth0': 'lan'}.get, lambda: ['lan'])
+
+
+class TestRealWanCapture:
+
+    def test_port_forwards_from_flat_dnat(self, wan_api, wan_sync):
+        summary = wan_sync.apply_system_cfg(copy.deepcopy(WAN_CAPTURE))
+        assert summary['port_forwards'] == 2 and summary['warnings'] == []
+        fwds = {r['target']: r for r in wan_api.search(DNAT_RULES.search)}
+        web = fwds['10.0.5.50']
+        assert (web['interface'], web['destination.network'], web['destination.port'],
+                web['local-port'], web['protocol']) == ('wan', 'wanip', '8080', '80', 'tcp/udp')
+        multi = fwds['10.0.5.51']
+        assert multi['source.network'] == '203.0.113.9' and multi['log'] == '1'
+        assert multi['destination.port'] == '9000-9005'
+        assert all('PREROUTING' in parse_tag(r['descr']) for r in fwds.values())
+
+    def test_wan_local_icmp_and_lan_group_rules(self, wan_api, wan_sync):
+        wan_sync.apply_system_cfg(copy.deepcopy(WAN_CAPTURE))
+        rules = {r['description'].split(' ', 1)[1]: r for r in wan_api.search(FILTER_RULES.search)}
+        ping = rules['lab allow ping']
+        assert (ping['interface'], ping['action'], ping['protocol'], ping['source_net'],
+                ping['destination_net']) == ('wan', 'pass', 'ICMP', '198.51.100.7', '(self)')
+        nas = rules['lab block nas web']
+        assert nas['destination_net'].startswith('ufg_') and nas['destination_port'].startswith('ufg_')
+
+    def test_controller_and_mirrored_entries_skipped(self, wan_api, wan_sync):
+        cfg = copy.deepcopy(WAN_CAPTURE)
+        nat = cfg['udapi']['firewall/nat']
+        mirrored = dict(next(r for r in nat if r.get('target') == 'DNAT'),
+                        id=99, description='PortForward DNAT [[OPNsense] Plex]')
+        nat.append(mirrored)
+        wan_sync.apply_system_cfg(cfg)
+        assert len(wan_api.search(DNAT_RULES.search)) == 2
+        names = {r['hostname'] for r in wan_api.search(UNBOUND_HOSTS.search)}
+        # the controller's own "unifi" name is kept: UniFi devices find the
+        # controller through it, as they would via a real UXG's DNS
+        assert names == {'unifi', 'nas'}
+
+    def test_icmp_type_maps_to_opnsense(self, wan_api, wan_sync):
+        cfg = copy.deepcopy(WAN_CAPTURE)
+        chain('udapi' and cfg, 'WAN_LOCAL')['rules'][0]['icmpType'] = 'echo-request'
+        wan_sync.apply_system_cfg(cfg)
+        ping = [r for r in wan_api.search(FILTER_RULES.search) if 'lab allow ping' in r['description']][0]
+        assert ping['icmptype'] == 'echoreq'

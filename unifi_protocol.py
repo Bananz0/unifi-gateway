@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import time
 import json
+import re
 import ast
 import os
 
@@ -177,10 +178,15 @@ def decode_inform(config, encoded_data):
 
 
 def _resolve_lan_identity(config, dc, lan_if):
-    """Get LAN MAC and IP, preferring live data but falling back to config."""
-    mac = dc.data.get('macs', {}).get(lan_if)
-    if not mac:
-        mac = config.get('gateway', 'lan_mac')
+    """Get LAN MAC and IP, preferring live data but falling back to config.
+
+    The MAC is the device identity: the inform header always carries the
+    configured ``lan_mac`` and the controller rejects a payload whose MAC
+    differs ("mac inconsistent in header and payload"), so a configured MAC
+    wins over the live interface MAC."""
+    mac = config.get('gateway', 'lan_mac', fallback='')
+    if not mac or mac == '00:00:00:00:00:00':
+        mac = dc.data.get('macs', {}).get(lan_if) or mac
     ip_info = dc.data.get('ip', {}).get(lan_if, {})
     ip_addr = ip_info.get('address')
     if not ip_addr:
@@ -332,8 +338,14 @@ def _uxg_port_table(config, dc, ports, primary_lan):
     macs = dc.data.get('macs', {})
     hosts = _hosts_by_port(dc, ports, primary_lan)
     table = []
-    for idx, port in enumerate(ports, 1):
+    for seq, port in enumerate(ports, 1):
         ifname = port['ifname']
+        # UXG front-panel ports are ethN = port N+1 (UXG-Max: eth0-eth3 are
+        # LAN ports 1-4, eth4 is the WAN port 5). The controller seeds its
+        # port table from the model and matches reported ports by index, so
+        # config order must not decide the number.
+        match = re.match(r'^eth(\d+)$', ifname)
+        idx = int(port.get('port_idx') or (int(match.group(1)) + 1 if match else seq))
         info = ifstat.get(ifname, {})
         entry = {
             'port_idx': idx,

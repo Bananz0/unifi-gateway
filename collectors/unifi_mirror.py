@@ -132,6 +132,7 @@ class OPNsenseMirror:
         self.wan_identifiers = wan_identifiers
         self.warnings = []
         self._networks = None
+        self._base = None
         self._group_ids = {}
 
     def _warn(self, msg, *args):
@@ -213,6 +214,7 @@ class OPNsenseMirror:
     def run(self):
         self.warnings = []
         self._networks = None
+        self._base = None
         summary = {}
         aliases = self._aliases()
         for label, fn in (('groups', lambda: self.mirror_groups(aliases)),
@@ -341,6 +343,15 @@ class OPNsenseMirror:
                 raise ValueError('port %s has no UniFi equivalent' % port)
         return fields
 
+    def _rule_base(self):
+        """First user rule number for this site's gateway: the controller
+        only accepts 2000+ for a USG and 20000+ for UniFi OS gateways (UXG,
+        UDM), answering api.err.FirewallRuleIndexOutOfRange otherwise."""
+        if self._base is None:
+            types = {d.get('type') for d in self.ctl.call('GET', 'stat/device')}
+            self._base = 20000 if types & {'uxg', 'udm'} else 2000
+        return self._base
+
     def mirror_firewall_rules(self, aliases):
         lan = set(self.lan_identifiers()) | {'LAN'}
         wan = set(self.wan_identifiers())
@@ -382,7 +393,7 @@ class OPNsenseMirror:
             except ValueError as e:
                 self._warn('firewall rule %r not mirrored: %s' % (descr, e))
                 continue
-            index[ruleset] = index.get(ruleset, 1999) + 1
+            index[ruleset] = index.get(ruleset, self._rule_base() - 1) + 1
             name = _name(descr)
             while name in desired:
                 name = (name + '*')[:128]
