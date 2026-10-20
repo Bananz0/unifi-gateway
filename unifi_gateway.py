@@ -9,6 +9,7 @@ import re
 import signal
 import socket
 import subprocess
+import threading
 import sys
 import time
 import urllib.request
@@ -274,8 +275,15 @@ class UnifiGateway(Daemon):
 
         mac = response.get('mac', '')
         if cmd == 'speed-test':
-            if not self._call_collector('run_speedtest'):
-                self._run_speedtest()
+            # a test takes ~30s; running it here would stall the inform loop
+            # long enough for the controller to drop the gateway's clients
+            running = getattr(self, '_speedtest_thread', None)
+            if running and running.is_alive():
+                logger.info('Speed test already running')
+            else:
+                self._speedtest_thread = threading.Thread(
+                    target=self._speedtest_job, name='speedtest', daemon=True)
+                self._speedtest_thread.start()
         elif cmd in ('block-sta', 'unblock-sta', 'kick-sta') and mac:
             method = {
                 'block-sta': 'block_client',
@@ -319,6 +327,10 @@ class UnifiGateway(Daemon):
             self.interval = max(1, int(value))
         except (TypeError, ValueError):
             logger.warning('Ignoring invalid inform interval %r', value)
+
+    def _speedtest_job(self):
+        if not self._call_collector('run_speedtest'):
+            self._run_speedtest()
 
     def _run_speedtest(self):
         logger.info('Running speed test...')

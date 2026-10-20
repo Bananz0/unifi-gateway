@@ -59,7 +59,9 @@ class TestCommands:
         gateway.datacollector.run_speedtest.return_value = True
         with patch.object(gateway, '_run_speedtest') as local:
             gateway._handle_response({'_type': 'cmd', 'cmd': 'speed-test'})
+            gateway._speedtest_thread.join(5)   # runs off the inform loop
         local.assert_not_called()
+        gateway.datacollector.run_speedtest.assert_called_once_with()
 
     def test_reboot_delegates(self, gateway):
         gateway._handle_response({'_type': 'reboot'})
