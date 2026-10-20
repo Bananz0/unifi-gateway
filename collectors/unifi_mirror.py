@@ -111,6 +111,10 @@ class UniFiController:
         return body
 
 
+# the label OPNsense's firewall log gives its default block rule
+DEFAULT_DENY = 'Default deny / state violation rule'
+
+
 def _name(text):
     return ('%s %s' % (MIRROR_PREFIX, (text or '').strip() or 'unnamed'))[:128]
 
@@ -412,6 +416,25 @@ class OPNsenseMirror:
                 'state_new': False, 'state_related': False, 'ipsec': '',
             })
             desired[name] = obj
+        # OPNsense's built-in default deny has no UniFi object. Firewall-log
+        # blocks are reported as triggers that must name a blocking UniFi
+        # policy, so it is mirrored as the last WAN_IN rule (the translator
+        # never pushes [OPNsense] rules back).
+        ruleset = 'WAN_IN'
+        index[ruleset] = index.get(ruleset, self._rule_base() - 1) + 1
+        while (ruleset, index[ruleset]) in taken:
+            index[ruleset] += 1
+        name = _name(DEFAULT_DENY)
+        desired[name] = {
+            'name': name, 'ruleset': ruleset, 'rule_index': index[ruleset],
+            'enabled': True, 'action': 'drop', 'protocol': 'all',
+            'protocol_match_excepted': False, 'logging': True,
+            'state_established': False, 'state_invalid': False,
+            'state_new': False, 'state_related': False, 'ipsec': '',
+            'src_firewallgroup_ids': [], 'dst_firewallgroup_ids': [],
+            'src_address': '', 'dst_address': '', 'src_port': '', 'dst_port': '',
+            'src_networkconf_type': 'NETv4', 'dst_networkconf_type': 'NETv4',
+        }
         self._sync('firewallrule', desired, self._mirrored('firewallrule'),
                    ('ruleset', 'rule_index', 'enabled', 'action', 'protocol',
                     'src_address', 'dst_address', 'dst_port', 'src_port',

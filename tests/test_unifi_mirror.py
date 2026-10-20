@@ -147,7 +147,12 @@ class TestMirror:
         mirror.run()
         rules = by_name(mirror.ctl, 'firewallrule')
         assert set(rules) == {'[OPNsense] Default allow LAN to any rule',
-                              '[OPNsense] OpenVPN', '[OPNsense] To home server web'}
+                              '[OPNsense] OpenVPN', '[OPNsense] To home server web',
+                              '[OPNsense] Default deny / state violation rule'}
+        deny = rules['[OPNsense] Default deny / state violation rule']
+        # stands in for OPNsense's built-in block so firewall-log triggers
+        # can name a blocking UniFi policy
+        assert (deny['ruleset'], deny['action'], deny['logging']) == ('WAN_IN', 'drop', True)
         lan = rules['[OPNsense] Default allow LAN to any rule']
         assert (lan['ruleset'], lan['action'], lan['protocol']) == ('LAN_IN', 'accept', 'all')
         assert lan['src_networkconf_id'] == 'lan-net' and lan['rule_index'] == 2000
