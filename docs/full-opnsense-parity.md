@@ -13,7 +13,7 @@ of current support. Baseline: `feat/uxg-lab-fixes` at `f61a875`.
 | IPv4 | Selected firewall, DNAT, DNS records, reservations and routes translate. Owned LAN VLANs now support static/DHCP-client address modes and MTU. Primary WAN/LAN address/gateway/client writes, MSS and full policy routing remain missing. | Compare actual interface/routing/filter state with requested values; full connectivity and recovery tests. |
 | IPv6 | Owned VLAN static IPv6 and explicit SLAAC mode writes exist alongside selected rule/route handling. Static address confirmed in the lab kernel. This is not a complete IPv6 stack translator. | DHCPv6 WAN, prefix delegation, LAN prefixes, router advertisements, DHCPv6 and DNS, ICMPv6, firewall and routes tested with real clients. |
 | DHCP server | Dnsmasq IPv4 pools, lease duration, subnet mask, domain, router/DNS options, managed listener expansion and scoped cleanup implemented. Real isolated VLAN client received the requested lease/options. Unmanaged conflicts are rejected. Production deployment pending. | Exclusions, NTP, PXE/TFTP, custom options and IPv6 as supported by the actual UniFi schema; controller-driven network defaults and client reachability. Keep Dnsmasq as the production backend. |
-| DHCP relay | DHCRelay destinations and relay lifecycle implemented in source, including IPv4/IPv6 address-family validation. Self-relay declarations are ignored; unmanaged relays and competing local pools are protected. | Real API and DHCPv4/DHCPv6 packet tests; relay-agent options and role transitions remain incomplete. |
+| DHCP relay | DHCRelay destinations, scoped lifecycle and ordered owned server/relay transitions implemented in source, including IPv4/IPv6 address-family validation. Self-relay declarations are ignored; unmanaged services are protected. Real API transitions and running service checks passed. | DHCPv4/DHCPv6 relay packet tests and relay-agent options remain incomplete. Mixed IPv4 roles require strict Dnsmasq interface binding. |
 | VPN | Missing translation for tunnel configuration and status. Existing OPNsense OpenVPN configuration is independent. | WireGuard first, then OpenVPN/IPsec mappings where controller schemas exist; peers, keys/certs, routes, DNS, firewall/NAT, handshakes and client data transfer. Teleport/Site Magic are not assumed equivalent. |
 | Smart Queues / QoS | Missing. | Map rates/directions/flow isolation to OPNsense traffic shaping; test upload/download throughput, loaded latency and queue counters. Report differences in scheduling semantics. |
 | Ethernet flow control | Missing. Distinct from connection Traffic Flows. | Translate supported pause-frame settings through the actual NIC/driver backend and read them back; do not simulate hardware support. |
@@ -71,9 +71,30 @@ Existing production LAN pools are intentionally not adopted implicitly. A
 conflicting manual pool or router/DNS option rejects controller pool writes.
 The controller's local-IP-to-itself relay representation creates no relay.
 Unsupported server fields reject the pool section rather than disappearing.
-DHCP role transitions with an existing local pool are rejected explicitly.
-Multi-object API updates are not transactional; rollback and recovery after a
-mid-update API failure still need integration coverage.
+Owned DHCP server/relay role transitions now preflight both roles and stop the
+old role before starting the new one. Manual conflicts remain protected.
+Multi-object API updates are not transactional; failed operations converge on
+retry, with a temporary service interruption rather than simultaneous roles.
+Automatic rollback to the old role is not implemented.
+
+The isolated 26.7.7 package VM exercised server -> relay -> server -> removal,
+with Dnsmasq running throughout, an active relay reporting green, both factory
+LAN ranges retained, and zero writes for identical repeated requests. This is
+service/API evidence; a DHCP lease through the relay remains unverified.
+The first experiment exposed an orphan process: OPNsense reconfigure stops only
+relay UUIDs still in its model. Retirement now disables and applies the relay
+before deleting its record or destination. Merely accepting the API's success
+response was insufficient: Dnsmasq could fail to bind while returning success.
+The coordinator now verifies its running status and retains failed service
+applies for retry, including writes whose response was lost. The first
+reconciliation after daemon restart reapplies saved service configuration.
+
+Mixed Dnsmasq IPv4 server and relay roles require existing strict interface
+binding; requests without it are rejected before writes. This global setting is
+not changed implicitly. A separate real VM check confirmed Dnsmasq could restart
+while a relay was active with strict binding enabled. See the
+[OPNsense DHCRelay documentation](https://docs.opnsense.org/manual/dhcrelay.html).
+These changes remain source/lab only and are not deployed to production.
 
 The base 26.7 assignment API exposes fewer interface fields than the installed
 production 26.7.7 model. In the VM, a newly created VLAN also required the

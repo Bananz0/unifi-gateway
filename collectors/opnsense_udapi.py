@@ -31,8 +31,7 @@ import re
 from .opnsense_api import OPNsenseAPIError
 from .opnsense_ids import apply_ids
 from .opnsense_coverage import untranslated_paths
-from .opnsense_dhcp import plan_servers, sync_servers
-from .opnsense_relay import plan_relays, sync_relays
+from .opnsense_dhcp_roles import sync_dhcp_roles
 from .opnsense_interfaces import VLANProvisioner
 from .opnsense_sync import (
     ALIAS_PREFIX, ALIASES, BLOCK_RULE_KEY, BLOCKED_IP_ALIAS, BLOCKED_MAC_ALIAS, DNAT_RULES,
@@ -271,13 +270,7 @@ class UDAPIConfigSync(OPNsenseConfigSync):
             if not servers or any('rangeStart' in s or 'relay' in s for s in servers):
                 try:
                     if self._dhcp_backend() == 'dnsmasq':
-                        pools, _ = plan_servers(servers, self.resolve_interface)
-                        relays = plan_relays(servers, self.resolve_interface)
-                        if ({p['interface'] for p in pools.values()}
-                                & {r['interface'] for r in relays.values()}):
-                            raise ValueError('DHCP server and relay cannot share an interface')
-                        summary['dhcp_relays'] = sync_relays(self, servers)
-                        summary['dhcp_pools'] = sync_servers(self, servers)
+                        summary.update(sync_dhcp_roles(self, servers))
                 except OPNsenseAPIError:
                     raise  # retry transient service failures without caching success
                 except (ValueError, KeyError, TypeError) as e:

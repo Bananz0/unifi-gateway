@@ -6,7 +6,7 @@ from their reference to a tagged destination, never from an interface match.
 import hashlib
 import ipaddress
 
-from .opnsense_api import OPNsenseAPIError
+from .opnsense_api import OPNsenseAPI, OPNsenseAPIError
 from .opnsense_sync import ItemSpec, make_tag, parse_tag, _row_value
 
 
@@ -62,8 +62,7 @@ def plan_relays(servers, resolve):
     return desired
 
 
-def sync_relays(sync, servers):
-    desired = plan_relays(servers, sync.resolve_interface)
+def relay_inventory(sync):
     # Read raw relay records: search results replace destination UUIDs with
     # display names, which must never be used to infer ownership.
     destinations = sync.api.search(DESTINATIONS.search)
@@ -75,6 +74,12 @@ def sync_relays(sync, servers):
         if not isinstance(detail, dict):
             raise OPNsenseAPIError('could not read relay configuration')
         relays.append(dict(detail, uuid=row['uuid']))
+    return owned, relays
+
+
+def preflight_relays(sync, desired, retiring_pools=()):
+    """Check unmanaged collisions without changing either DHCP service."""
+    owned, relays = relay_inventory(sync)
     for row in relays:
         if _row_value(row, 'destination') not in owned:
             if any(r['interface'] == _row_value(row, 'interface') for r in desired.values()):
@@ -84,8 +89,21 @@ def sync_relays(sync, servers):
         # controller-owned pool. Role transitions require explicit cleanup.
         from .opnsense_dhcp import RANGES
         for row in sync.api.search(RANGES.search):
+            if row['uuid'] in retiring_pools:
+                continue
             if any(r['interface'] in _row_value(row, 'interface').split(',') for r in desired.values()):
                 raise ValueError('DHCP relay conflicts with a local DHCP pool')
+    return owned, relays
+
+
+def sync_relays(sync, servers):
+    desired = plan_relays(servers, sync.resolve_interface)
+    owned, relays = preflight_relays(sync, desired)
+    # configd only stops PIDs for UUIDs still present in the model. Deleting
+    # an active record first leaves an orphan relay holding UDP/67 indefinitely.
+    stop_relays(sync, [row for row in relays
+                      if _row_value(row, 'destination') in owned
+                      and owned[_row_value(row, 'destination')] not in desired])
     payloads = {key: {'name': make_tag(key), 'server': row['server']}
                 for key, row in desired.items()}
     changed, uuids = sync.sync_items(DESTINATIONS, payloads, delete_stale=False)
@@ -120,3 +138,18 @@ def sync_relays(sync, servers):
         if not isinstance(result, dict) or result.get('status') != 'ok':
             raise OPNsenseAPIError('DHCP relay reconfigure failed')
     return len(desired)
+
+
+def stop_relays(sync, rows):
+    """Disable and apply while UUIDs remain addressable, before deleting."""
+    for row in rows:
+        if _row_value(row, 'enabled') != '0':
+            result = sync.api.post(RELAY_ROOT + 'set_relay/' + row['uuid'],
+                                   {'relay': {'enabled': '0'}})
+            OPNsenseAPI.check_saved(result, 'disable retiring DHCP relay')
+    if rows:
+        # Also retry this when records are already disabled: the previous
+        # request may have saved them but failed before stopping the process.
+        result = sync.api.post('dhcrelay/service/reconfigure')
+        if not isinstance(result, dict) or result.get('status') != 'ok':
+            raise OPNsenseAPIError('DHCP relay stop failed')

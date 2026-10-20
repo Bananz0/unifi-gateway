@@ -17,7 +17,9 @@ class DHCPAPI(FakeAPI):
     def __init__(self):
         super().__init__()
         self.gets['dnsmasq/settings/get'] = {'dnsmasq': {
-            'enable': '1', 'interface': '', 'port': '53053', 'dhcp': {'no_interface': ''}}}
+            'enable': '1', 'strictbind': '1', 'interface': '', 'port': '53053',
+            'dhcp': {'no_interface': ''}}}
+        self.gets['dnsmasq/service/status'] = {'status': 'running'}
 
     def post(self, path, payload=None, **kwargs):
         if path == 'dnsmasq/settings/set':

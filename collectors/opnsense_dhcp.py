@@ -83,11 +83,12 @@ def plan_servers(servers, resolve):
     return ranges, options
 
 
-def sync_servers(sync, servers):
-    """Apply a complete, prevalidated IPv4 section; return managed pool count."""
-    ranges, options = plan_servers(servers, sync.resolve_interface)
+def preflight_servers(sync, ranges, options, retiring_relays=()):
+    """Check conflicts before either role is changed. No API writes."""
     if ranges:
         for row in sync.api.search('dhcrelay/settings/search_relay'):
+            if row['uuid'] in retiring_relays:
+                continue
             detail = sync.api.get('dhcrelay/settings/get_relay/' + row['uuid']).get('relay')
             if not isinstance(detail, dict):
                 raise ValueError('could not check existing DHCP relay')
@@ -126,6 +127,13 @@ def sync_servers(sync, servers):
         for payload in options.values():
             if (not any(scopes) or payload['interface'] in scopes) and _row_value(row, 'option') == payload['option']:
                 raise ValueError('unmanaged DHCP option conflicts with controller settings')
+    return listeners
+
+
+def sync_servers(sync, servers):
+    """Apply a complete, prevalidated IPv4 section; return managed pool count."""
+    ranges, options = plan_servers(servers, sync.resolve_interface)
+    listeners = preflight_servers(sync, ranges, options)
     # Keep unrelated tagged objects if this backend grows more collections.
     changed, _ = sync.sync_items(RANGES, ranges, keep=lambda key: not key.startswith('pool-'))
     option_changed, _ = sync.sync_items(OPTIONS, options, keep=lambda key: not key.startswith('pool-'))
