@@ -42,6 +42,7 @@ from .opnsense_quality import WanQuality
 from .client_traffic import ClientTraffic
 from .unifi_mirror import OPNsenseMirror, UniFiController
 from .opnsense_appblocks import SimpleAppBlockSync
+from .adguard_appblocks import AdGuardAppBlockSync, AdGuardHome
 
 logger = logging.getLogger('unifi-gateway')
 
@@ -87,7 +88,11 @@ UNIFI_DEFAULTS = {
     'url': '', 'username': '', 'password': '', 'site': 'default',
     'verify_ssl': 'false', 'mirror': 'true', 'mirror_interval': '300',
     'app_control': 'true', 'app_control_interval': '30',
+    # zenarmor | adguard: what enforces UniFi simple app blocks
+    'app_control_backend': 'zenarmor',
 }
+ADGUARD_SECTION = 'adguard'
+ADGUARD_DEFAULTS = {'url': 'http://127.0.0.1:3000', 'username': '', 'password': ''}
 
 
 class OPNSenseCollector(FreeBSDCollector):
@@ -232,7 +237,18 @@ class OPNSenseCollector(FreeBSDCollector):
             self.mirror = OPNsenseMirror(self.api, controller(), self.lan_identifiers,
                                          self.wan_identifiers)
             logger.info('Mirroring OPNsense config into the UniFi controller at %s', url)
-        if app_enabled:
+        if app_enabled and str(opts['app_control_backend']).lower() == 'adguard':
+            agh = dict(ADGUARD_DEFAULTS)
+            if config.has_section(ADGUARD_SECTION):
+                agh.update({k: config.get(ADGUARD_SECTION, k) for k in ADGUARD_DEFAULTS
+                            if config.has_option(ADGUARD_SECTION, k)})
+            if agh['username'] and agh['password']:
+                self.appcontrol = AdGuardAppBlockSync(
+                    AdGuardHome(agh['url'], agh['username'], agh['password']), controller())
+                logger.info('Enforcing UniFi app blocks with AdGuard Home at %s', agh['url'])
+            else:
+                logger.warning('UniFi app blocks: set [adguard] username/password for AdGuard Home')
+        elif app_enabled:
             self.appcontrol = SimpleAppBlockSync(self.api, controller())
 
     def _firewall_log(self):

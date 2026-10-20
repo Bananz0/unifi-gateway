@@ -29,8 +29,9 @@ def _security_baseline(detail):
     return result
 
 
-def plan_blocks(rules, networks, applications):
-    """Compile captured Network 10.6 simple-app-block fields into exact scopes."""
+def plan_blocks(rules, networks, applications, resolve=resolve_app_ids):
+    """Compile captured Network 10.6 simple-app-block fields into exact scopes.
+    ``resolve`` maps UniFi app IDs onto the enforcing backend's catalog."""
     if not isinstance(rules, list):
         raise ValueError('app-block response is not a rule list')
     grouped = {}
@@ -47,7 +48,7 @@ def plan_blocks(rules, networks, applications):
             raise ValueError('app-block schedule requires a schedule translator')
         if rule.get('target_type') != 'APP_ID' or rule.get('app_category_ids'):
             raise ValueError('application category blocks require an explicit category map')
-        apps = resolve_app_ids(rule.get('app_ids') or [], applications)
+        apps = resolve(rule.get('app_ids') or [], applications)
         if not apps:
             raise ValueError('app block has no applications')
         scopes = []
