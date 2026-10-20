@@ -31,7 +31,7 @@ from . import base
 from .freebsd import FreeBSDCollector
 from .opnsense_api import OPNsenseAPI, OPNsenseAPIError
 from .opnsense_sync import OPNsenseConfigSync, normalize_mac
-from .opnsense_udapi import UDAPIConfigSync, is_udapi_config
+from .opnsense_udapi import UDAPIConfigSync, is_udapi_config, trigger_tags
 from .zenarmor import ZenarmorDPI
 from .opnsense_fwlog import FirewallLogTriggers
 from .netflow import NetflowTotals
@@ -115,6 +115,7 @@ class OPNSenseCollector(FreeBSDCollector):
         self._mirror_thread = None
         self.fwlog = None
         self._policy_cache = (0, {})
+        self._trigger_tags = {}
         self._init_mirror(config)
         if str(self.opts['dpi']).lower() not in ('0', 'false', 'no', 'off'):
             dpi = ZenarmorDPI(self.opts['zenarmor_db'],
@@ -189,7 +190,15 @@ class OPNSenseCollector(FreeBSDCollector):
         return self.fwlog
 
     def _policy_ids(self):
-        """{OPNsense rule description: id of its mirrored UniFi rule}."""
+        """Firewall-log label -> UniFi policy: rules the controller pushed
+        resolve through their triggerTag ((chain, id) -> {id, type}); OPNsense's
+        own rules through the mirrored [OPNsense] rule with the same name."""
+        ids = dict(self._mirrored_policy_ids())
+        ids.update({('rule', chain, num): tag
+                    for (chain, num), tag in self._trigger_tags.items()})
+        return ids
+
+    def _mirrored_policy_ids(self):
         stamp, ids = self._policy_cache
         if self.mirror is None or time.time() - stamp < 300:
             return ids
@@ -875,6 +884,7 @@ class OPNSenseCollector(FreeBSDCollector):
     def apply_system_cfg(self, cfg, force=False):
         if not self.sync:
             return False
+        self._trigger_tags = trigger_tags(cfg)
         digest = _digest(cfg)
         if not force and digest == self._state.get('system_cfg_hash'):
             return True

@@ -62,7 +62,9 @@ SET_ALIAS_TYPES = {'address': None, 'mac': 'mac', 'port': 'port'}
 RULE_KEYS = {'id', 'description', 'enabled', 'disabled', 'target', 'ipVersion',
              'protocol', 'source', 'destination', 'log', 'inInterface',
              'outInterface', 'states', 'connectionStates', 'connectionState',
-             'icmpType', 'icmpv6Type'}
+             'icmpType', 'icmpv6Type',
+             # the UniFi policy ({id, type}) a UXG names when it reports a hit
+             'triggerTag'}
 NAT_KEYS = RULE_KEYS | {'translation', 'chain'}
 
 # Network 10.6 matches "this interface's address/subnet" with virtual sets
@@ -113,6 +115,28 @@ def _mirrored(rule):
     description = RULESET_PREFIX.sub('', str(rule.get('description') or ''))
     forward = PORT_FORWARD_NAME.match(description)
     return is_mirrored(forward.group(1) if forward else description)
+
+
+def trigger_tags(cfg):
+    """{(chain, rule id): {id, type}}: the UniFi policy behind each UDAPI
+    rule, which OPNsense rule keys (ufw-<chain>-<id>-<if>) carry back."""
+    udapi = cfg.get('udapi') if isinstance(cfg, dict) else None
+    tags = {}
+    if not isinstance(udapi, dict):
+        return tags
+    for chain in udapi.get('firewall/filter') or []:
+        name = (chain.get('config') or {}).get('name') if isinstance(chain, dict) else None
+        for rule in (chain.get('rules') or []) if name else []:
+            tag = rule.get('triggerTag') if isinstance(rule, dict) else None
+            if isinstance(tag, dict) and tag.get('id') and 'id' in rule:
+                tags[(name, str(rule['id']))] = {'id': str(tag['id']),
+                                                 'type': str(tag.get('type') or 'FIREWALL_RULE')}
+    for rule in udapi.get('firewall/nat') or []:
+        tag = rule.get('triggerTag') if isinstance(rule, dict) else None
+        if isinstance(tag, dict) and tag.get('id') and 'id' in rule:
+            tags[(str(rule.get('chain', '')), str(rule['id']))] = {
+                'id': str(tag['id']), 'type': str(tag.get('type') or 'PORT_FORWARDING')}
+    return tags
 
 
 def is_udapi_config(cfg):
@@ -189,6 +213,10 @@ class UDAPIConfigSync(OPNsenseConfigSync):
             forwards, fwd_aliases, fwd_failed = self._translate_nat(
                 udapi['firewall/nat'], sets)
             used_aliases.update(fwd_aliases)
+
+        if do_filter:
+            self._translate_geoip((udapi.get('services') or {}).get('geoipFiltering'),
+                                  rules, used_aliases)
 
         alias_changed, _ = self.sync_items(ALIASES, used_aliases, delete_stale=False)
         if alias_changed:
@@ -498,6 +526,46 @@ class UDAPIConfigSync(OPNsenseConfigSync):
                 for k in [k for k in rules if k.startswith(prefix)]:
                     del rules[k]
         return rules, aliases, failed
+
+    def _translate_geoip(self, geo, rules, aliases):
+        """Region blocking (services.geoipFiltering) -> a GeoIP alias and
+        quick rules on each listed WAN, ahead of the user rules. "block"
+        drops traffic to/from the countries; "allow" drops everything else."""
+        if not isinstance(geo, dict) or not geo.get('enabled'):
+            return
+        countries = [c for c in geo.get('countryList') or []
+                     if re.match(r'^[A-Z]{2}$', str(c))]
+        action = str(geo.get('action', 'block')).lower()
+        direction = str(geo.get('direction', 'both')).lower()
+        if not countries or action not in ('block', 'allow') or                 direction not in ('both', 'ingress', 'egress'):
+            self._warn('region blocking skipped: unsupported settings %r', geo)
+            return
+        name = 'ufg_geoip'
+        aliases[name] = self._alias_payload(
+            name, 'geoip', countries, 'UniFi region blocking')
+        negate = '1' if action == 'allow' else '0'
+        for iface in geo.get('interfaces') or [{'id': 'eth4'}]:
+            opn_if = self.resolve_interface(_ref_id(iface))
+            if not opn_if:
+                self._warn('region blocking: interface %s not mapped', _ref_id(iface))
+                continue
+            for flow, wanted, side in (('in', ('both', 'ingress'), 'source'),
+                                       ('out', ('both', 'egress'), 'destination')):
+                if direction not in wanted:
+                    continue
+                key = 'ugeo-%s-%s' % (flow, opn_if)
+                rules[key] = {
+                    'enabled': '1', 'action': 'block', 'quick': '1',
+                    'interface': opn_if, 'direction': flow, 'ipprotocol': 'inet',
+                    'protocol': 'any',
+                    'source_net': name if side == 'source' else 'any',
+                    'source_not': negate if side == 'source' else '0', 'source_port': '',
+                    'destination_net': name if side == 'destination' else 'any',
+                    'destination_not': negate if side == 'destination' else '0',
+                    'destination_port': '', 'log': '1', 'sequence': '100',
+                    'description': make_tag(key, 'UniFi region %s %s' % (
+                        action, ','.join(countries))),
+                }
 
     def _udapi_rule_payload(self, rule, key, opn_if, direction, local, sets, aliases):
         unknown = set(rule) - RULE_KEYS

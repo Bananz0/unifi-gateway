@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import re
 
 import pytest
 
@@ -394,3 +395,54 @@ class TestRealWanCapture:
         wan_sync.apply_system_cfg(cfg)
         ping = [r for r in wan_api.search(FILTER_RULES.search) if 'lab allow ping' in r['description']][0]
         assert ping['icmptype'] == 'echoreq'
+
+
+class TestRegionBlocking:
+    """services.geoipFiltering as captured from Network 10.6.106 after
+    enabling Region Blocking for CN and RU."""
+
+    def apply(self, wan_api, wan_sync, **geo):
+        cfg = copy.deepcopy(WAN_CAPTURE)
+        cfg['udapi'].setdefault('services', {})['geoipFiltering'] = {
+            'enabled': True, 'action': 'block', 'countryList': ['CN', 'RU'],
+            'direction': 'both', 'interfaces': [{'id': 'eth4'}], **geo}
+        summary = wan_sync.apply_system_cfg(cfg)
+        rules = {r['description'].split()[0]: r for r in wan_api.search(FILTER_RULES.search)
+                 if 'ugeo-' in r.get('description', '')}
+        aliases = {a['name']: a for a in wan_api.search(ALIASES.search)}
+        return summary, rules, aliases
+
+    def test_block_both_directions(self, wan_api, wan_sync):
+        summary, rules, aliases = self.apply(wan_api, wan_sync)
+        assert not summary['warnings']
+        assert aliases['ufg_geoip']['type'] == 'geoip'
+        assert set(re.split(r'[,\n]', aliases['ufg_geoip']['content'])) == {'CN', 'RU'}
+        inbound = rules['unifi-gw:ugeo-in-wan']
+        assert (inbound['interface'], inbound['direction'], inbound['action']) == ('wan', 'in', 'block')
+        assert inbound['source_net'] == 'ufg_geoip' and inbound['source_not'] == '0'
+        outbound = rules['unifi-gw:ugeo-out-wan']
+        assert outbound['direction'] == 'out' and outbound['destination_net'] == 'ufg_geoip'
+
+    def test_allow_list_negates_and_ingress_only(self, wan_api, wan_sync):
+        _, rules, _ = self.apply(wan_api, wan_sync, action='allow', direction='ingress')
+        assert set(rules) == {'unifi-gw:ugeo-in-wan'}
+        assert rules['unifi-gw:ugeo-in-wan']['source_not'] == '1'
+
+    def test_disabled_removes_rules(self, wan_api, wan_sync):
+        self.apply(wan_api, wan_sync)
+        _, rules, _ = self.apply(wan_api, wan_sync, enabled=False)
+        assert rules == {}
+
+
+def test_trigger_tagged_rules_are_still_translated(wan_api, wan_sync):
+    """With trigger logs advertised, Network 10.6 adds triggerTag to every
+    user rule and port forward; they must not be skipped as unknown."""
+    cfg = copy.deepcopy(WAN_CAPTURE)
+    for chain in cfg['udapi']['firewall/filter']:
+        for rule in chain.get('rules') or []:
+            rule['triggerTag'] = {'id': '6ad6addb3b3b84feb42f9f7d', 'type': 'FIREWALL_RULE'}
+    for rule in cfg['udapi']['firewall/nat']:
+        rule['triggerTag'] = {'id': '6ad6adc83b3b84feb42f9f68', 'type': 'PORT_FORWARDING'}
+    summary = wan_sync.apply_system_cfg(cfg)
+    assert not [w for w in summary['warnings'] if 'triggerTag' in w]
+    assert summary['port_forwards'] == 2

@@ -56,3 +56,27 @@ def test_api_failure_is_quiet():
     api, log = make()
     api.rows = None
     assert log.poll() == 0
+
+
+def test_controller_rules_resolve_through_trigger_tags():
+    tag = {'id': 'bbbbbbbbbbbbbbbbbbbbbbbb', 'type': 'FIREWALL_RULE'}
+    api, log = make({('rule', 'LAN_IN', '20000'): tag})
+    api.rows = [entry('old')]
+    log.poll()
+    api.rows.append(entry('d1', label='unifi-gw:ufw-LAN_IN-20000-lan lab block nas web'))
+    log.poll()
+    [trigger] = log.take()
+    assert (trigger['id'], trigger['type']) == (tag['id'], 'FIREWALL_RULE')
+
+
+def test_trigger_tags_from_udapi_config():
+    from collectors.opnsense_udapi import trigger_tags
+    cfg = {'udapi': {
+        'firewall/filter': [{'config': {'name': 'LAN_IN'}, 'rules': [
+            {'id': 20000, 'target': 'DROP', 'triggerTag': {'id': 'x1', 'type': 'FIREWALL_RULE'}},
+            {'id': 30000, 'target': 'ACCEPT'}]}],
+        'firewall/nat': [{'chain': 'PREROUTING', 'id': 2, 'target': 'DNAT',
+                          'triggerTag': {'id': 'p1', 'type': 'PORT_FORWARDING'}}]}}
+    assert trigger_tags(cfg) == {
+        ('LAN_IN', '20000'): {'id': 'x1', 'type': 'FIREWALL_RULE'},
+        ('PREROUTING', '2'): {'id': 'p1', 'type': 'PORT_FORWARDING'}}

@@ -11,6 +11,7 @@ when the log label matches one.
 import collections
 import ipaddress
 import logging
+import re
 import time
 
 from .opnsense_api import OPNsenseAPIError
@@ -22,6 +23,9 @@ LOG_LIMIT = 1000
 # stands in for OPNsense's own rules (default deny, bogons...) that have no
 # UniFi object; a fixed ObjectId so the controller groups them together
 DEFAULT_POLICY_ID = '000000000000000000000001'
+# rules the emulator created from the controller's config:
+# "unifi-gw:ufw-LAN_IN-20000-lan ..." / "unifi-gw:upf-PREROUTING-2-wan ..."
+MANAGED_RULE = re.compile(r'^unifi-gw:u(?:fw|pf)-(.+)-(\d+)-[^-\s]+(?:\s|$)')
 
 
 class FirewallLogTriggers:
@@ -92,9 +96,10 @@ class FirewallLogTriggers:
               'version': 'v%d' % src.version}
         if row.get('srcport') and row.get('dstport'):
             ip.update(sport=int(row['srcport']), dport=int(row['dstport']))
+        policy = _policy(row.get('label') or '', policies)
         trigger = {
-            'id': policies.get(row.get('label') or '', DEFAULT_POLICY_ID),
-            'type': 'FIREWALL_RULE',
+            'id': policy['id'],
+            'type': policy['type'],
             'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(stamp)),
             'ip': ip,
             'ethernet': {'protocol': proto, 'family': 2 if src.version == 4 else 10},
@@ -102,3 +107,16 @@ class FirewallLogTriggers:
             ('in' if row.get('dir') == 'in' else 'out'): iface,
         }
         return trigger
+
+
+def _policy(label, policies):
+    """The UniFi policy a firewall-log label belongs to."""
+    match = MANAGED_RULE.match(label)
+    if match:
+        tag = policies.get(('rule', match.group(1), match.group(2)))
+        if tag:
+            return tag
+    found = policies.get(label)
+    if isinstance(found, dict):
+        return found
+    return {'id': found or DEFAULT_POLICY_ID, 'type': 'FIREWALL_RULE'}
