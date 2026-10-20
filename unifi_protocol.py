@@ -93,10 +93,10 @@ def encode_inform(config, data, encryption='CBC'):
 
     if config.getboolean('gateway', 'is_adopted'):
         key = config.get('gateway', 'key')
-        if config.getboolean('gateway', 'use_aes_gcm'):
-            encryption = 'GCM'
-        else:
-            encryption = 'CBC'
+    # a controller that has seen this MAC use AES-GCM rejects later CBC
+    # informs as a downgrade, even after the device was forgotten
+    if config.has_option('gateway', 'use_aes_gcm'):
+        encryption = 'GCM' if config.getboolean('gateway', 'use_aes_gcm') else 'CBC'
 
     mac = config.get('gateway', 'lan_mac')
 
